@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hts-foundation"
+version = "0.1.0"
+description = "Hard-to-Soft (HtS) generated-computation architecture library with CPU/GPU/TPU device detection."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Hung Anh Le", email = "hunganhl642@gmail.com"}
+]
+keywords = [
+    "transformer",
+    "hts",
+    "hard-to-soft",
+    "generated-computation",
+    "deep-learning",
+    "pytorch",
+    "architecture",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "matplotlib>=3.7",
+    "tqdm>=4.64",
+]
+
+[project.optional-dependencies]
+tpu = ["torch-xla"]
+dev = [
+    "pytest>=7.0",
+    "build",
+    "twine",
+]
+
+[project.urls]
+Homepage = "https://github.com/hunganhl642/hts-foundation"
+Documentation = "https://github.com/hunganhl642/hts-foundation#readme"
+Repository = "https://github.com/hunganhl642/hts-foundation"
+Issues = "https://github.com/hunganhl642/hts-foundation/issues"
+
+[project.scripts]
+hts-train = "hts.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["hts*"]
+exclude = ["tests*", "runs*", "scripts*", "examples*", "docs*"]
+
+[tool.setuptools.package-data]
+hts = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
