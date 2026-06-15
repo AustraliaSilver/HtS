@@ -35,6 +35,8 @@ import numpy as np
 import torch
 
 
+# Make `python /path/to/HtS/benchmarks/kaggle_validation_a.py` use the
+# freshly cloned repo source instead of a stale site-packages install.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SRC_DIR = _REPO_ROOT / "src"
 if _SRC_DIR.exists() and str(_SRC_DIR) not in sys.path:
@@ -62,6 +64,8 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    # This keeps results more reproducible.  We do not force fully deterministic
+    # algorithms because some CUDA kernels become much slower or unavailable.
     torch.backends.cudnn.benchmark = False
 
 
@@ -110,6 +114,7 @@ def train_one(
     seed: int,
     eval_batches: int = 4,
 ) -> Dict[str, Any]:
+    # Critical fix: seed BEFORE model construction.
     seed_everything(seed)
     device = config.device if config.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
     model = model_factory().to(device)
@@ -236,6 +241,8 @@ def agg(results: List[Dict[str, Any]]) -> Dict[str, float]:
 
 
 def make_config(max_length: int, num_classes: int) -> HtSB12Config:
+    # Slightly safer B12 controls.  These keep the original B12 philosophy but
+    # reduce seed-sensitive overshoot from an overly strong correction branch.
     return HtSB12Config(
         vocab_size=128,
         max_length=max_length,

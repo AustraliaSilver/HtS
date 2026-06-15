@@ -70,12 +70,15 @@ def make_string_count_batch(
     if gen is not None:
         gen.manual_seed(int(seed))
 
+    # Sample lengths and full random token matrix on CPU.
     lengths = torch.randint(min_length, max_length + 1, (batch_size,), generator=gen, dtype=torch.long)
+    # Values 1..10 correspond exactly to TOKENS values.
     ids = torch.randint(1, len(TOKENS) + 1, (batch_size, max_length), generator=gen, dtype=torch.long)
     positions = torch.arange(max_length, dtype=torch.long).unsqueeze(0)
     mask = positions < lengths.unsqueeze(1)
     ids = ids.masked_fill(~mask, PAD)
 
+    # Sample tasks from the requested mixture.
     task_name_to_id = torch.tensor([TASKS[t] for t in task_mix], dtype=torch.long)
     sampled = torch.randint(0, len(task_mix), (batch_size,), generator=gen, dtype=torch.long)
     tasks = task_name_to_id[sampled]

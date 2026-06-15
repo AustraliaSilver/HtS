@@ -81,10 +81,12 @@ class TaskConditionedLowRank(nn.Module):
         return out
 
     def budget_tensor(self) -> torch.Tensor:
+        # Smooth proxy. Kept as Tensor for regularization compatibility.
         return self.a.weight.abs().mean() + self.b.weight.abs().mean()
 
     def diagnostics(self) -> Dict[str, float]:
         return dict(self._last)
+
 
 
 
@@ -182,6 +184,7 @@ class HtSB12FFN(nn.Module):
         base_norm = _masked_norm_mean(base.detach(), valid_mask)
         raw_norm = _masked_norm_mean(raw, valid_mask) + eps
         scale = target[:, None, :] * base_norm / raw_norm
+        # Guard against rare enormous scales from unlucky near-zero raw deltas.
         scale = scale.clamp(max=8.0)
         return raw * scale
 

@@ -75,6 +75,8 @@ class HtSB12Classifier(nn.Module):
         self.config = config
         extra = 1 if config.use_cls_token else 0
         self.token_emb = nn.Embedding(config.vocab_size, config.d_model)
+        # Direct task signal at input level.  The FFN routers still receive task ids,
+        # but this embedding lets attention/CLS pooling separate task families early.
         self.task_input_emb = nn.Embedding(config.num_tasks, config.d_model)
         self.cls = nn.Parameter(torch.zeros(1, 1, config.d_model)) if config.use_cls_token else None
         self.pos = SinusoidalPosition(config.max_length + extra, config.d_model)
@@ -119,7 +121,7 @@ class HtSB12Classifier(nn.Module):
     def hts_regularizers(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         regs = [layer.ffn.hts_regularizers() for layer in self.layers]
         cols = list(zip(*regs))
-        return tuple(torch.stack(list(c)).mean() for c in cols)
+        return tuple(torch.stack(list(c)).mean() for c in cols)  # type: ignore[return-value]
 
     def hts_diagnostics(self) -> Dict[str, float]:
         out: Dict[str, float] = {}
