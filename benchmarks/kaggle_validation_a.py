@@ -99,7 +99,7 @@ def train_one(
         for g in optimizer.param_groups:
             g["lr"] = lr
 
-        batch = train_batch_fn(config.batch_size, device, config.seed * 1_000_000 + step)
+        batch = train_batch_fn(config.batch_size, device, seed * 1_000_000 + step)
         logits = model(batch.input_ids, batch.task_ids)
 
         loss_bd = objective(model, logits, batch.labels, step=step)
@@ -123,7 +123,7 @@ def train_one(
             model.eval()
             with torch.no_grad():
                 tr_acc = float(accuracy(logits, batch.labels))
-                ev = eval_batch_fn(config.batch_size, device, config.seed * 2_000_000 + step)
+                ev = eval_batch_fn(config.batch_size, device, seed * 2_000_000 + step)
                 ev_logits = model(ev.input_ids, ev.task_ids)
                 val_acc = float(accuracy(ev_logits, ev.labels))
             model.train()
@@ -146,7 +146,7 @@ def train_one(
 
     model.eval()
     with torch.no_grad():
-        te = eval_batch_fn(512, device, config.seed * 3_000_000)
+        te = eval_batch_fn(512, device, seed * 3_000_000)
         te_logits = model(te.input_ids, te.task_ids)
         test_acc = float(accuracy(te_logits, te.labels))
 
@@ -171,6 +171,11 @@ def agg(results: List[Dict]) -> Dict[str, float]:
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--a2-only", action="store_true", help="Run only A2 (skip A1)")
+    args = parser.parse_args()
+
     RESULTS_DIR.mkdir(exist_ok=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -208,31 +213,32 @@ def main():
     # =====================================================================
     # A1: STABILITY — multi-seed
     # =====================================================================
-    print("\n" + "=" * 70)
-    print("  A1: STABILITY — 5 seeds, cosine warmup, spike detection")
-    print("=" * 70)
-
     a1_hts, a1_tf = [], []
-    for seed in SEEDS:
-        print(f"\n  Seed {seed}...")
-        bf = make_batch_fn(max_length, num_classes, full_tasks)
+    if not args.a2_only:
+        print("\n" + "=" * 70)
+        print("  A1: STABILITY — 5 seeds, cosine warmup, spike detection")
+        print("=" * 70)
 
-        r = train_one("HtS-B12", HtSB12Classifier(cfg), bf, bf, tc, seed)
-        a1_hts.append(r)
-        print(f"    HtS-B12:      val={r['best_val']*100:.1f}%  test={r['test']*100:.1f}%  spikes={r['spikes']}  max_spike={r['max_spike']}x")
+        for seed in SEEDS:
+            print(f"\n  Seed {seed}...")
+            bf = make_batch_fn(max_length, num_classes, full_tasks)
 
-        r = train_one("Transformer", TransformerClassifier(cfg), bf, bf, tc, seed)
-        a1_tf.append(r)
-        print(f"    Transformer:  val={r['best_val']*100:.1f}%  test={r['test']*100:.1f}%  spikes={r['spikes']}  max_spike={r['max_spike']}x")
+            r = train_one("HtS-B12", HtSB12Classifier(cfg), bf, bf, tc, seed)
+            a1_hts.append(r)
+            print(f"    HtS-B12:      val={r['best_val']*100:.1f}%  test={r['test']*100:.1f}%  spikes={r['spikes']}  max_spike={r['max_spike']}x")
 
-    s_hts = agg(a1_hts)
-    s_tf = agg(a1_tf)
-    all_summary["A1"] = {"hts": s_hts, "tf": s_tf}
+            r = train_one("Transformer", TransformerClassifier(cfg), bf, bf, tc, seed)
+            a1_tf.append(r)
+            print(f"    Transformer:  val={r['best_val']*100:.1f}%  test={r['test']*100:.1f}%  spikes={r['spikes']}  max_spike={r['max_spike']}x")
 
-    print(f"\n  A1 SUMMARY ({len(SEEDS)} seeds):")
-    print(f"    HtS-B12:      val={s_hts['val_mean']:.1f}+/-{s_hts['val_std']:.1f}%  test={s_hts['test_mean']:.1f}+/-{s_hts['test_std']:.1f}%  spikes={s_hts['avg_spikes']}")
-    print(f"    Transformer:  val={s_tf['val_mean']:.1f}+/-{s_tf['val_std']:.1f}%  test={s_tf['test_mean']:.1f}+/-{s_tf['test_std']:.1f}%  spikes={s_tf['avg_spikes']}")
-    print(f"    Delta test:   {s_hts['test_mean'] - s_tf['test_mean']:+.1f}pp")
+        s_hts = agg(a1_hts)
+        s_tf = agg(a1_tf)
+        all_summary["A1"] = {"hts": s_hts, "tf": s_tf}
+
+        print(f"\n  A1 SUMMARY ({len(SEEDS)} seeds):")
+        print(f"    HtS-B12:      val={s_hts['val_mean']:.1f}+/-{s_hts['val_std']:.1f}%  test={s_hts['test_mean']:.1f}+/-{s_hts['test_std']:.1f}%  spikes={s_hts['avg_spikes']}")
+        print(f"    Transformer:  val={s_tf['val_mean']:.1f}+/-{s_tf['val_std']:.1f}%  test={s_tf['test_mean']:.1f}+/-{s_tf['test_std']:.1f}%  spikes={s_tf['avg_spikes']}")
+        print(f"    Delta test:   {s_hts['test_mean'] - s_tf['test_mean']:+.1f}pp")
 
     # =====================================================================
     # A2: HELD-OUT GENERALIZATION
@@ -289,10 +295,11 @@ def main():
     print(f"  Device: {device}")
     print(f"  HtS-B12 params: {hts_params:,}  |  Transformer params: {tf_params:,}")
 
-    print(f"\n  A1 (Stability):")
-    print(f"    HtS-B12:     {all_summary['A1']['hts']['test_mean']:.1f}+/-{all_summary['A1']['hts']['test_std']:.1f}%")
-    print(f"    Transformer: {all_summary['A1']['tf']['test_mean']:.1f}+/-{all_summary['A1']['tf']['test_std']:.1f}%")
-    print(f"    Delta:       {all_summary['A1']['hts']['test_mean'] - all_summary['A1']['tf']['test_mean']:+.1f}pp")
+    if "A1" in all_summary:
+        print(f"\n  A1 (Stability):")
+        print(f"    HtS-B12:     {all_summary['A1']['hts']['test_mean']:.1f}+/-{all_summary['A1']['hts']['test_std']:.1f}%")
+        print(f"    Transformer: {all_summary['A1']['tf']['test_mean']:.1f}+/-{all_summary['A1']['tf']['test_std']:.1f}%")
+        print(f"    Delta:       {all_summary['A1']['hts']['test_mean'] - all_summary['A1']['tf']['test_mean']:+.1f}pp")
 
     print(f"\n  A2a (Train short, test long):")
     print(f"    HtS-B12:     {all_summary['A2a']['hts']['test_mean']:.1f}+/-{all_summary['A2a']['hts']['test_std']:.1f}%")
