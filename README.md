@@ -351,3 +351,38 @@ When comparing HtS to Transformer:
 ## License
 
 MIT License. See `LICENSE`.
+
+## Publication Benchmark-C
+
+This repository includes `benchmarks/kaggle_publication_c.py`, a diagnostic benchmark that follows Benchmark-B and tests whether held-out failure is caused by capacity/label availability, bucket interpolation, or true length extrapolation.
+
+Run:
+
+```bash
+python benchmarks/kaggle_publication_c.py --quick
+python benchmarks/kaggle_publication_c.py --protocols c1 --steps 5000 --seeds 42,123,777
+python benchmarks/kaggle_publication_c.py --protocols c1,c2,c3 --steps 5000 --seeds 42,123,777
+```
+
+See `docs/PUBLICATION_BENCHMARK_C.md` for details.
+
+## Kaggle T4×2 dual-GPU Benchmark-C
+
+If your Kaggle runtime has two T4 GPUs, run HtS-B12 and the Transformer baseline concurrently:
+
+```bash
+python /kaggle/working/HtS/benchmarks/kaggle_publication_c_dualgpu.py \
+  --protocols c1,c2,c3 \
+  --steps 5000 \
+  --seeds 42,123,777
+```
+
+The launcher assigns HtS-B12 to physical GPU `0` and Transformer-ParamMatched to physical GPU `1` via `CUDA_VISIBLE_DEVICES`, then merges results into `publication_c_results_dualgpu/`.
+
+For a quick check:
+
+```bash
+python /kaggle/working/HtS/benchmarks/kaggle_publication_c_dualgpu.py --quick
+```
+
+See `docs/DUAL_GPU_KAGGLE.md`.
