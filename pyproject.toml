@@ -3,71 +3,37 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hts-foundation"
+name = "hts-b12"
 version = "0.1.0"
-description = "Hard-to-Soft (HtS) generated-computation architecture library with CPU/GPU/TPU device detection."
+description = "HtS-B12: Hard-to-Soft generated-computation architecture for task-conditioned sequence modeling."
 readme = "README.md"
-license = {text = "MIT"}
 requires-python = ">=3.9"
-authors = [
-    {name = "Hung Anh Le", email = "hunganhl642@gmail.com"}
-]
-keywords = [
-    "transformer",
-    "hts",
-    "hard-to-soft",
-    "generated-computation",
-    "deep-learning",
-    "pytorch",
-    "architecture",
-]
+license = {file = "LICENSE"}
+authors = [{name = "HtS Contributors"}]
+keywords = ["pytorch", "transformer", "dynamic-weights", "hypernetwork", "task-conditioned", "generated-computation"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Topic :: Software Development :: Libraries :: Python Modules",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = [
-    "torch>=2.0",
-    "numpy>=1.23",
-    "pandas>=1.5",
-    "matplotlib>=3.7",
-    "tqdm>=4.64",
-]
+dependencies = ["torch>=2.0", "numpy>=1.23", "pyyaml>=6.0"]
 
 [project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.5"]
+plot = ["matplotlib>=3.7", "pandas>=2.0"]
 tpu = ["torch-xla"]
-dev = [
-    "pytest>=7.0",
-    "build",
-    "twine",
-]
-
-[project.urls]
-Homepage = "https://github.com/hunganhl642/hts-foundation"
-Documentation = "https://github.com/hunganhl642/hts-foundation#readme"
-Repository = "https://github.com/hunganhl642/hts-foundation"
-Issues = "https://github.com/hunganhl642/hts-foundation/issues"
 
 [project.scripts]
-hts-train = "hts.cli:main"
+hts-b12 = "hts_b12.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["hts*"]
-exclude = ["tests*", "runs*", "scripts*", "examples*", "docs*"]
+where = ["src"]
 
-[tool.setuptools.package-data]
-hts = ["py.typed"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-v --tb=short"
+[tool.ruff]
+line-length = 100

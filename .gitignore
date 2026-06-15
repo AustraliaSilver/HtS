@@ -72,3 +72,14 @@ Thumbs.db
 runs/
 smoke_run/
 *.log
+temp/
+venv/
+.venv/
+__pycache__/
+*.pyc
+.eggs/
+*.egg-info/
+dist/
+build/
+.ruff_cache/
+.pytest_cache/

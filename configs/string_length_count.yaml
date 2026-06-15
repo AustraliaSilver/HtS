@@ -1,0 +1,29 @@
+name: string_length_count
+vocab_size: 128
+max_length: 64
+pad_token_id: 0
+description: Built-in string length/count group.
+tasks:
+  - {name: length, id: 0, description: Predict sequence length}
+  - {name: count_a, id: 1, description: Count token a}
+  - {name: count_b, id: 2, description: Count token b}
+  - {name: count_digit, id: 3, description: Count digit-like symbols}
+  - {name: count_upper, id: 4, description: Count uppercase-like symbols}
+  - {name: parity, id: 5, description: Predict parity}
+  - {name: first_last_match, id: 6, description: First/last match classification}
+  - {name: bucket_length, id: 7, description: Coarse length bucket}
+labels:
+  num_classes: 128
+recommended_model:
+  d_model: 128
+  n_heads: 4
+  num_layers: 2
+  dim_ff: 256
+  rank_main: 8
+  rank_corr: 4
+  task_dim: 32
+recommended_training:
+  lr: 0.001
+  warmup_steps: 250
+  grad_clip: 1.0
+  weight_decay: 0.01

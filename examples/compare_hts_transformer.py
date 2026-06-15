@@ -1,7 +1,14 @@
-"""Train HtS and Transformer baseline with the same public interface."""
-from hts import HtSConfig, TransformerConfig, TrainConfig
-from hts.training import train_synthetic
+"""Tiny API comparison between HtS-B12 and Transformer baseline."""
+from pathlib import Path
+import sys
 
-cfg = TrainConfig(steps=120, batch_size=64, eval_every=40, eval_batches=5, device="auto", seed=42)
-train_synthetic("transformer", train_config=cfg, tf_config=TransformerConfig(), out_dir="runs/compare_transformer")
-train_synthetic("hts", train_config=cfg, hts_config=HtSConfig(), out_dir="runs/compare_hts")
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from hts_b12 import HtSB12Classifier, HtSB12Config, TransformerClassifier, count_parameters
+
+cfg = HtSB12Config(vocab_size=128, num_tasks=8, num_classes=64, max_length=32, d_model=64, dim_ff=128, num_layers=1)
+hts = HtSB12Classifier(cfg)
+tf = TransformerClassifier(cfg)
+print(f"HtS-B12 params:      {count_parameters(hts):,}")
+print(f"Transformer params:  {count_parameters(tf):,}")
