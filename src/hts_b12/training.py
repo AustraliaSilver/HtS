@@ -79,7 +79,7 @@ def train_classifier(
                 **loss_bd.scalars(),
             }
             if hasattr(model, "hts_diagnostics"):
-                row.update(model.hts_diagnostics())  # type: ignore[arg-type]
+                row.update(model.hts_diagnostics())
             rows.append(row)
             if acc > best_acc:
                 best_acc = acc
@@ -104,8 +104,8 @@ def train_group_classifier(
     train_group_classifier(model, "string_length_count", TrainConfig(...))
     ```
 
-    For custom projects, register a `ModelGroupConfig` and a batch factory in a
-    `ModelGroupRegistry`, then pass that registry here.
+    For custom projects, register a ``ModelGroupConfig`` and a batch factory in a
+    ``ModelGroupRegistry``, then pass that registry here.
     """
 
     from .groups import GLOBAL_REGISTRY

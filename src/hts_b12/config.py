@@ -28,12 +28,10 @@ class HtSB12Config:
     dim_ff: int = 256
     dropout: float = 0.1
 
-    # HtS generated-update capacity.
     task_dim: int = 32
     rank_main: int = 8
     rank_corr: int = 4
 
-    # B12 routing/generation controls.
     alpha_max: float = 1.20
     target_min: float = 0.25
     target_max: float = 0.90
@@ -41,15 +39,12 @@ class HtSB12Config:
     corr_gain: float = 6.0
     task_offset_scale: float = 0.30
 
-    # Safety constraints.
     ratio_ceiling: float = 0.95
     corr_ceiling: float = 0.35
 
-    # Pooling/classification.
-    pool: str = "cls"  # "cls" or "mean"
+    pool: str = "cls"
     use_cls_token: bool = True
 
-    # Loss defaults.
     margin: float = 0.60
     margin_weight: float = 0.03
     ratio_reg: float = 1e-3

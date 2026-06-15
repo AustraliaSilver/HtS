@@ -81,12 +81,28 @@ class TaskConditionedLowRank(nn.Module):
         return out
 
     def budget_tensor(self) -> torch.Tensor:
-        # Smooth proxy. Kept as Tensor for regularization compatibility.
         return self.a.weight.abs().mean() + self.b.weight.abs().mean()
 
     def diagnostics(self) -> Dict[str, float]:
         return dict(self._last)
 
+
+
+def _masked_mean(x: torch.Tensor, valid_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Mean over tokens, ignoring padding when a valid-token mask is supplied."""
+    if valid_mask is None:
+        return x.mean(dim=1)
+    m = valid_mask.to(dtype=x.dtype, device=x.device).unsqueeze(-1)
+    return (x * m).sum(dim=1) / m.sum(dim=1).clamp_min(1.0)
+
+
+def _masked_norm_mean(x: torch.Tensor, valid_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Mean token norm with optional padding mask, returned as [B,1,1]."""
+    n = x.norm(dim=-1, keepdim=True)
+    if valid_mask is None:
+        return n.mean(dim=1, keepdim=True)
+    m = valid_mask.to(dtype=x.dtype, device=x.device).unsqueeze(-1)
+    return (n * m).sum(dim=1, keepdim=True) / m.sum(dim=1, keepdim=True).clamp_min(1.0)
 
 class HtSB12FFN(nn.Module):
     """B12 true-FFN generated-computation block.
@@ -156,15 +172,21 @@ class HtSB12FFN(nn.Module):
         self._task_offset_l2 = torch.tensor(0.0)
 
     @staticmethod
-    def _targeted(base: torch.Tensor, raw: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def _targeted(
+        base: torch.Tensor,
+        raw: torch.Tensor,
+        target: torch.Tensor,
+        valid_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         eps = 1e-6
-        base_norm = base.detach().norm(dim=-1, keepdim=True).mean(dim=1, keepdim=True)
-        raw_norm = raw.norm(dim=-1, keepdim=True).mean(dim=1, keepdim=True) + eps
+        base_norm = _masked_norm_mean(base.detach(), valid_mask)
+        raw_norm = _masked_norm_mean(raw, valid_mask) + eps
         scale = target[:, None, :] * base_norm / raw_norm
+        scale = scale.clamp(max=8.0)
         return raw * scale
 
-    def forward(self, x: torch.Tensor, task: torch.Tensor) -> torch.Tensor:
-        ctx = x.mean(dim=1)
+    def forward(self, x: torch.Tensor, task: torch.Tensor, valid_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        ctx = _masked_mean(x, valid_mask)
         te = self.task_emb(task)
         rr = self.router(torch.cat([ctx, te], dim=-1))
         off = self.task_offset_scale * torch.tanh(self.task_router_offset(task))
@@ -179,21 +201,21 @@ class HtSB12FFN(nn.Module):
 
         base1 = self.base_l1(x)
         raw_main1 = self.main1(x, task, ctx)
-        main1 = gate[:, None, :] * alpha[:, None, :] * self._targeted(base1, raw_main1, target1)
+        main1 = gate[:, None, :] * alpha[:, None, :] * self._targeted(base1, raw_main1, target1, valid_mask)
         corr1 = cgate[:, None, :] * calpha[:, None, :] * self.corr_gain * self.corr1(x, task, ctx)
         h = F.gelu(base1 + main1 + corr1)
         h = self.dropout(h)
 
-        ctx2 = h.mean(dim=1)
+        ctx2 = _masked_mean(h, valid_mask)
         base2 = self.base_l2(h)
         raw_main2 = self.main2(h, task, ctx2)
-        main2 = gate[:, None, :] * alpha[:, None, :] * self._targeted(base2, raw_main2, target2)
+        main2 = gate[:, None, :] * alpha[:, None, :] * self._targeted(base2, raw_main2, target2, valid_mask)
         y = base2 + main2
 
         eps = 1e-6
-        ratio1 = (main1 + corr1).norm(dim=-1).mean() / (base1.detach().norm(dim=-1).mean() + eps)
-        ratio2 = main2.norm(dim=-1).mean() / (base2.detach().norm(dim=-1).mean() + eps)
-        corr_ratio = corr1.norm(dim=-1).mean() / (base1.detach().norm(dim=-1).mean() + eps)
+        ratio1 = (_masked_norm_mean(main1 + corr1, valid_mask).mean() / (_masked_norm_mean(base1.detach(), valid_mask).mean() + eps))
+        ratio2 = (_masked_norm_mean(main2, valid_mask).mean() / (_masked_norm_mean(base2.detach(), valid_mask).mean() + eps))
+        corr_ratio = (_masked_norm_mean(corr1, valid_mask).mean() / (_masked_norm_mean(base1.detach(), valid_mask).mean() + eps))
         ratio = 0.5 * (ratio1 + ratio2)
 
         budget = gate.mean() * 0.5 * (self.main1.budget_tensor() + self.main2.budget_tensor())

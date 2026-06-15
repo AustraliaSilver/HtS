@@ -45,7 +45,8 @@ class HtSB12EncoderLayer(nn.Module):
     def forward(self, x: torch.Tensor, task: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         attn_out, _ = self.attn(x, x, x, key_padding_mask=key_padding_mask, need_weights=False)
         x = self.norm1(x + self.dropout(attn_out))
-        ffn_out = self.ffn(x, task)
+        valid_mask = None if key_padding_mask is None else (~key_padding_mask).to(dtype=x.dtype)
+        ffn_out = self.ffn(x, task, valid_mask=valid_mask)
         x = self.norm2(x + self.dropout(ffn_out))
         return x
 
@@ -74,6 +75,7 @@ class HtSB12Classifier(nn.Module):
         self.config = config
         extra = 1 if config.use_cls_token else 0
         self.token_emb = nn.Embedding(config.vocab_size, config.d_model)
+        self.task_input_emb = nn.Embedding(config.num_tasks, config.d_model)
         self.cls = nn.Parameter(torch.zeros(1, 1, config.d_model)) if config.use_cls_token else None
         self.pos = SinusoidalPosition(config.max_length + extra, config.d_model)
         self.dropout = nn.Dropout(config.dropout)
@@ -81,6 +83,7 @@ class HtSB12Classifier(nn.Module):
         self.norm = nn.LayerNorm(config.d_model)
         self.head = nn.Linear(config.d_model, config.num_classes)
         nn.init.normal_(self.token_emb.weight, std=0.02)
+        nn.init.normal_(self.task_input_emb.weight, std=0.02)
         if self.cls is not None:
             nn.init.normal_(self.cls, std=0.02)
 
@@ -90,7 +93,7 @@ class HtSB12Classifier(nn.Module):
         task_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        x = self.token_emb(input_ids)
+        x = self.token_emb(input_ids) + self.task_input_emb(task_ids)[:, None, :]
         if self.cls is not None:
             cls = self.cls.expand(input_ids.size(0), -1, -1)
             x = torch.cat([cls, x], dim=1)
@@ -116,7 +119,7 @@ class HtSB12Classifier(nn.Module):
     def hts_regularizers(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         regs = [layer.ffn.hts_regularizers() for layer in self.layers]
         cols = list(zip(*regs))
-        return tuple(torch.stack(list(c)).mean() for c in cols)  # type: ignore[return-value]
+        return tuple(torch.stack(list(c)).mean() for c in cols)
 
     def hts_diagnostics(self) -> Dict[str, float]:
         out: Dict[str, float] = {}

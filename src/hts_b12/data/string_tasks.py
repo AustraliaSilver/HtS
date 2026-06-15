@@ -1,7 +1,8 @@
-"""Synthetic string length/count benchmark used for quick HtS validation.
+"""Synthetic string length/count benchmark used for HtS validation.
 
-The generator returns task-conditioned sequence classification batches. It is
-intentionally lightweight so users can test CPU/GPU/TPU plumbing before scaling.
+The original generator used a Python loop over the batch.  That is fine for
+small smoke tests but becomes a bottleneck on Kaggle/GPU.  This version keeps
+exactly the same task semantics while generating the batch vectorially.
 """
 from __future__ import annotations
 
@@ -23,7 +24,6 @@ TOKENS = {
     "x": 9,
     "y": 10,
 }
-
 TASKS: Dict[str, int] = {
     "length": 0,
     "count_a": 1,
@@ -53,43 +53,49 @@ def make_string_count_batch(
     """Generate a batch for length/count tasks.
 
     Labels are integer counts clipped to ``num_classes - 1``.
+    Generation is deterministic for a given seed and vectorized on CPU before
+    moving tensors to the requested device.  Keeping RNG on CPU makes results
+    reproducible across CPU/GPU/TPU as much as PyTorch allows.
     """
+    if min_length < 1:
+        raise ValueError("min_length must be >= 1")
+    if max_length < min_length:
+        raise ValueError("max_length must be >= min_length")
+    for task in task_mix:
+        if task not in TASKS:
+            raise KeyError(task)
+
     dev = torch.device(device)
-    if seed is not None:
-        gen = torch.Generator(device="cpu")
-        gen.manual_seed(seed)
-    else:
-        gen = None
+    gen = torch.Generator(device="cpu") if seed is not None else None
+    if gen is not None:
+        gen.manual_seed(int(seed))
 
-    ids = torch.zeros(batch_size, max_length, dtype=torch.long)
-    mask = torch.zeros(batch_size, max_length, dtype=torch.long)
-    tasks = torch.empty(batch_size, dtype=torch.long)
-    labels = torch.empty(batch_size, dtype=torch.long)
+    lengths = torch.randint(min_length, max_length + 1, (batch_size,), generator=gen, dtype=torch.long)
+    ids = torch.randint(1, len(TOKENS) + 1, (batch_size, max_length), generator=gen, dtype=torch.long)
+    positions = torch.arange(max_length, dtype=torch.long).unsqueeze(0)
+    mask = positions < lengths.unsqueeze(1)
+    ids = ids.masked_fill(~mask, PAD)
 
-    vocab_vals = torch.tensor(list(TOKENS.values()), dtype=torch.long)
-    digit_vals = torch.tensor([TOKENS["0"], TOKENS["1"], TOKENS["2"], TOKENS["3"]], dtype=torch.long)
-    vowel_like_vals = torch.tensor([TOKENS["a"]], dtype=torch.long)
+    task_name_to_id = torch.tensor([TASKS[t] for t in task_mix], dtype=torch.long)
+    sampled = torch.randint(0, len(task_mix), (batch_size,), generator=gen, dtype=torch.long)
+    tasks = task_name_to_id[sampled]
 
-    for i in range(batch_size):
-        length = int(torch.randint(min_length, max_length + 1, (1,), generator=gen).item())
-        seq = vocab_vals[torch.randint(0, len(vocab_vals), (length,), generator=gen)]
-        ids[i, :length] = seq
-        mask[i, :length] = 1
-        task_name = task_mix[int(torch.randint(0, len(task_mix), (1,), generator=gen).item())]
-        task_id = TASKS[task_name]
-        tasks[i] = task_id
-        if task_name == "length":
-            y = length
-        elif task_name == "count_a":
-            y = int((seq == TOKENS["a"]).sum().item())
-        elif task_name == "count_b":
-            y = int((seq == TOKENS["b"]).sum().item())
-        elif task_name == "count_digit":
-            y = int(torch.isin(seq, digit_vals).sum().item())
-        elif task_name == "count_vowel_like":
-            y = int(torch.isin(seq, vowel_like_vals).sum().item())
-        else:
-            raise KeyError(task_name)
-        labels[i] = min(y, num_classes - 1)
+    labels_by_task = {
+        TASKS["length"]: lengths,
+        TASKS["count_a"]: ((ids == TOKENS["a"]) & mask).sum(dim=1),
+        TASKS["count_b"]: ((ids == TOKENS["b"]) & mask).sum(dim=1),
+        TASKS["count_digit"]: (((ids >= TOKENS["0"]) & (ids <= TOKENS["3"])) & mask).sum(dim=1),
+        TASKS["count_vowel_like"]: ((ids == TOKENS["a"]) & mask).sum(dim=1),
+    }
 
-    return StringBatch(ids.to(dev), tasks.to(dev), labels.to(dev), mask.to(dev))
+    labels = torch.zeros(batch_size, dtype=torch.long)
+    for task_id, values in labels_by_task.items():
+        labels = torch.where(tasks == task_id, values, labels)
+    labels = labels.clamp_max(num_classes - 1)
+
+    return StringBatch(
+        input_ids=ids.to(dev),
+        task_ids=tasks.to(dev),
+        labels=labels.to(dev),
+        attention_mask=mask.to(dtype=torch.long).to(dev),
+    )
