@@ -141,6 +141,7 @@ class HtSB12FFN(nn.Module):
             nn.Linear(max(64, task_dim * 2), 6),
         )
         self.task_router_offset = nn.Embedding(num_tasks, 6)
+        nn.init.zeros_(self.router[-1].weight)
         nn.init.zeros_(self.router[-1].bias)
         nn.init.zeros_(self.task_router_offset.weight)
 
