@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hts-b12"
+version = "0.1.0"
+description = "HtS-B12: Hard-to-Soft generated-computation architecture for task-conditioned sequence modeling."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+authors = [{name = "HtS Contributors"}]
+keywords = ["pytorch", "transformer", "dynamic-weights", "hypernetwork", "task-conditioned", "generated-computation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["torch>=2.0", "numpy>=1.23", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.5"]
+plot = ["matplotlib>=3.7", "pandas>=2.0"]
+tpu = ["torch-xla"]
+
+[project.scripts]
+hts-b12 = "hts_b12.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = [
+  "pytest-cache-files-*",
+  "runs",
+  "validation_a_results",
+  "publication_*",
+]
+
+[tool.ruff.lint]
+per-file-ignores = { "benchmarks/*.py" = ["E402", "E701", "E702", "F401"], "examples/*.py" = ["E402", "F401"] }
