@@ -57,6 +57,9 @@ class HtSB12Config:
     budget_reg: float = 0.0
     binary_reg: float = 0.0
     task_offset_reg: float = 0.0
+    
+    # Router architecture.
+    router_per_task: bool = True  # Separate router per task vs shared router
 
     def __post_init__(self) -> None:
         positive_ints = {

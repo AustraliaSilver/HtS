@@ -48,6 +48,7 @@ class HtSB12EncoderLayer(nn.Module):
             ratio_ceiling=config.ratio_ceiling,
             corr_ceiling=config.corr_ceiling,
             name=f"layer{layer_id}_b12",
+            router_per_task=config.router_per_task,
         )
 
     def forward(self, x: torch.Tensor, task: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:

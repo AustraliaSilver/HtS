@@ -136,6 +136,7 @@ class HtSB12FFN(nn.Module):
         ratio_ceiling: float = 0.95,
         corr_ceiling: float = 0.35,
         name: str = "b12ffn",
+        router_per_task: bool = True,
     ) -> None:
         super().__init__()
         self.name = name
@@ -149,18 +150,39 @@ class HtSB12FFN(nn.Module):
         self.task_offset_scale = task_offset_scale
         self.ratio_ceiling = ratio_ceiling
         self.corr_ceiling = corr_ceiling
+        self.num_tasks = num_tasks
+        self.router_per_task = router_per_task
 
         self.base_l1 = nn.Linear(d_model, dim_ff)
         self.base_l2 = nn.Linear(dim_ff, d_model)
         self.task_emb = nn.Embedding(num_tasks, task_dim)
-        self.router = nn.Sequential(
-            nn.Linear(d_model + task_dim, max(64, task_dim * 2)),
-            nn.GELU(),
-            nn.Linear(max(64, task_dim * 2), 6),
-        )
+        
+        if router_per_task:
+            # Per-task router heads để giảm competition
+            self.task_router = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(d_model + task_dim, max(64, task_dim * 2)),
+                    nn.GELU(),
+                    nn.Linear(max(64, task_dim * 2), 6),
+                )
+                for _ in range(num_tasks)
+            ])
+        else:
+            # Shared router (default)
+            self.router = nn.Sequential(
+                nn.Linear(d_model + task_dim, max(64, task_dim * 2)),
+                nn.GELU(),
+                nn.Linear(max(64, task_dim * 2), 6),
+            )
+        
+        if router_per_task:
+            for tr in self.task_router:
+                nn.init.normal_(tr[-1].weight, std=0.02)
+                nn.init.zeros_(tr[-1].bias)
+        else:
+            nn.init.zeros_(self.router[-1].weight)
+            nn.init.zeros_(self.router[-1].bias)
         self.task_router_offset = nn.Embedding(num_tasks, 6)
-        nn.init.zeros_(self.router[-1].weight)
-        nn.init.zeros_(self.router[-1].bias)
         nn.init.zeros_(self.task_router_offset.weight)
 
         self.main1 = TaskConditionedLowRank(d_model, dim_ff, rank_main, task_dim, num_tasks, name=f"{name}_main1")
@@ -191,7 +213,17 @@ class HtSB12FFN(nn.Module):
     def forward(self, x: torch.Tensor, task: torch.Tensor, valid_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         ctx = _masked_mean(x, valid_mask)
         te = self.task_emb(task)
-        rr = self.router(torch.cat([ctx, te], dim=-1))
+        
+        # Use per-task router to avoid competition
+        if self.router_per_task:
+            rr = torch.zeros(task.size(0), 6, device=x.device, dtype=x.dtype)
+            for i in range(self.num_tasks):
+                mask = (task == i)
+                if mask.any():
+                    rr[mask] = self.task_router[i](torch.cat([ctx[mask], te[mask]], dim=-1))
+        else:
+            rr = self.router(torch.cat([ctx, te], dim=-1))
+        
         off = self.task_offset_scale * torch.tanh(self.task_router_offset(task))
         rr = rr + off
 
