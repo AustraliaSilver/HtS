@@ -42,9 +42,9 @@ class HtSB12Config:
     corr_gain: float = 6.0
     task_offset_scale: float = 0.30
 
-    # Safety constraints.
-    ratio_ceiling: float = 0.95
-    corr_ceiling: float = 0.35
+    # Safety constraints - set high for multi-task, lower for single-task.
+    ratio_ceiling: float = 2.0  # Increased from 0.95 for multi-task
+    corr_ceiling: float = 1.0   # Increased from 0.35 for multi-task
 
     # Pooling/classification.
     pool: str = "cls"  # "cls" or "mean"
