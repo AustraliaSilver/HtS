@@ -31,8 +31,9 @@ class HtSB12Config:
 
     # HtS generated-update capacity.
     task_dim: int = 32
-    rank_main: int = 8
-    rank_corr: int = 4
+    rank_main: int | list[int] = 24
+    rank_corr: int | list[int] = 12
+    rank_task_attn: int | list[int] = 8  # Low-rank for task-conditioned Q/K projections in attention
 
     # B12 routing/generation controls.
     alpha_max: float = 1.20
@@ -78,8 +79,17 @@ class HtSB12Config:
                 raise ValueError(f"{name} must be > 0")
         if self.d_model % self.n_heads != 0:
             raise ValueError("d_model must be divisible by n_heads")
-        if self.rank_main <= 0 or self.rank_corr <= 0:
-            raise ValueError("rank_main and rank_corr must be > 0")
+        def check_rank(val, name):
+            if isinstance(val, (list, tuple)):
+                for i, v in enumerate(val):
+                    if v <= 0:
+                        raise ValueError(f"{name}[{i}] must be > 0, got {v}")
+            elif val <= 0:
+                raise ValueError(f"{name} must be > 0, got {val}")
+
+        check_rank(self.rank_main, "rank_main")
+        check_rank(self.rank_corr, "rank_corr")
+        check_rank(self.rank_task_attn, "rank_task_attn")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1)")
         if self.pool not in {"cls", "mean"}:

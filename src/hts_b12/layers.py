@@ -1,7 +1,7 @@
 """Core layers for HtS-B12."""
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 import torch
 from torch import nn
@@ -9,8 +9,9 @@ import torch.nn.functional as F
 
 
 class SinusoidalPosition(nn.Module):
-    def __init__(self, max_length: int, d_model: int):
+    def __init__(self, max_length: int, d_model: int, p_drop: float = 0.0):
         super().__init__()
+        self.p_drop = p_drop
         pe = torch.zeros(max_length, d_model)
         position = torch.arange(0, max_length, dtype=torch.float32).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float32) * (-torch.log(torch.tensor(10000.0)) / d_model))
@@ -22,7 +23,11 @@ class SinusoidalPosition(nn.Module):
         self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.pe[:, : x.size(1)].to(dtype=x.dtype, device=x.device)
+        pe = self.pe[:, : x.size(1)].to(dtype=x.dtype, device=x.device)
+        if self.training and self.p_drop > 0:
+            mask = (torch.rand_like(pe) > self.p_drop).astype(x.dtype)
+            pe = pe * mask
+        return x + pe
 
 
 class TaskConditionedLowRank(nn.Module):
@@ -55,7 +60,7 @@ class TaskConditionedLowRank(nn.Module):
         self.a = nn.Linear(in_features, rank, bias=False)
         self.b = nn.Linear(rank, out_features, bias=False)
         self.router = nn.Sequential(
-            nn.Linear(in_features + task_dim, hidden),
+            nn.Linear(task_dim, hidden),
             nn.GELU(),
             nn.Linear(hidden, rank),
         )
@@ -67,12 +72,13 @@ class TaskConditionedLowRank(nn.Module):
         self._last: Dict[str, float] = {}
 
     def forward(self, x: torch.Tensor, task: torch.Tensor, ctx: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if ctx is None:
-            ctx = x.mean(dim=1)
         te = self.task_emb(task)
-        coeff = 1.0 + self.tune_scale * torch.tanh(self.router(torch.cat([ctx, te], dim=-1)))
-        z = self.a(x) * coeff[:, None, :]
+        # Context-free coeff + LN-stabilized per-token delta projection
+        coeff = 1.0 + self.tune_scale * torch.tanh(self.router(te))
+        x_ln = F.layer_norm(x, [self.in_features])
+        z = self.a(x_ln) * coeff[:, None, :]
         out = self.b(z)
+        # Record diagnostics for this low‑rank module.
         self._last = {
             f"{self.name}_rank": float(self.rank),
             f"{self.name}_coeff_abs": float(coeff.detach().abs().mean()),
@@ -80,16 +86,109 @@ class TaskConditionedLowRank(nn.Module):
         }
         return out
 
+    # ----------------------------------------------------------------------
+    # Budget & diagnostics (required by HtSB12FFN)
+    # ----------------------------------------------------------------------
     def budget_tensor(self) -> torch.Tensor:
-        # Smooth proxy. Kept as Tensor for regularization compatibility.
+        """Return a smooth proxy for the low‑rank module capacity.
+
+        The original implementation summed the absolute‑mean of the two factor
+        matrices. Keeping the same definition guarantees that regularisation
+        terms used in the loss remain comparable with the baseline.
+        """
         return self.a.weight.abs().mean() + self.b.weight.abs().mean()
 
     def diagnostics(self) -> Dict[str, float]:
+        """Expose the diagnostics collected in ``self._last``.
+
+        ``HtSB12FFN`` aggregates diagnostics from its sub‑modules, so we simply
+        return a copy of the internal dictionary.
+        """
         return dict(self._last)
 
+class AdaptiveBasisLowRank(nn.Module):
+    """Input‑adaptive low‑rank projection.
 
+    The low‑rank projection matrix ``a`` is *generated on‑the‑fly* from the
+    token statistics of the input sequence rather than being a fixed matrix.
+    This allows the low‑rank subspace to adapt to different input patterns
+    (short vs long sequences, OOD vs ID distributions), addressing the core
+    limitation identified in the OOD analysis.
 
+    The router remains **context‑free** (task embedding only), preserving
+    the length‑invariance that was found to be critical in the benchmark.
+    """
 
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        rank: int,
+        task_dim: int,
+        num_tasks: int,
+        hidden: Optional[int] = None,
+        tune_scale: float = 0.25,
+        name: str = "adaptive_basis",
+    ) -> None:
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.rank = rank
+        self.name = name
+        hidden = hidden or max(32, task_dim * 2)
+
+        self.task_emb = nn.Embedding(num_tasks, task_dim)
+
+        # Fixed base projection.
+        self.a_fixed = nn.Linear(in_features, rank, bias=False)
+        # Hypernetwork: input statistics → delta for the projection matrix.
+        self.a_gen = nn.Sequential(
+            nn.Linear(in_features, max(32, in_features // 4)),
+            nn.GELU(),
+            nn.Linear(max(32, in_features // 4), in_features * rank),
+        )
+        self.b = nn.Linear(rank, out_features, bias=False)
+        self.router = nn.Sequential(
+            nn.Linear(task_dim, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, rank),
+        )
+        self.tune_scale = tune_scale
+        nn.init.normal_(self.a_fixed.weight, std=0.02)
+        nn.init.normal_(self.b.weight, std=0.02)
+        nn.init.zeros_(self.router[-1].weight)
+        nn.init.zeros_(self.router[-1].bias)
+        # Initialise the generator so the output is near zero at start.
+        nn.init.zeros_(self.a_gen[-1].weight)
+        nn.init.zeros_(self.a_gen[-1].bias)
+        self._last: Dict[str, float] = {}
+
+    def forward(self, x: torch.Tensor, task: torch.Tensor, ctx: Optional[torch.Tensor] = None) -> torch.Tensor:
+        te = self.task_emb(task)
+        coeff = 1.0 + self.tune_scale * torch.tanh(self.router(te))
+        x_ln = F.layer_norm(x, [self.in_features])
+
+        # Generate adaptive projection offset from input token statistics.
+        x_stats = x_ln.mean(dim=1)  # [B, d_model]
+        delta = self.a_gen(x_stats)  # [B, in_features * rank]
+        delta = delta.view(-1, self.rank, self.in_features)  # [B, rank, in_features]
+        W_a = self.a_fixed.weight[None, :, :] + delta  # [B, rank, in_features]
+
+        z = torch.bmm(x_ln, W_a.transpose(1, 2)) * coeff[:, None, :]  # [B, T, rank]
+        out = self.b(z)  # [B, T, out_features]
+
+        self._last = {
+            f"{self.name}_rank": float(self.rank),
+            f"{self.name}_coeff_abs": float(coeff.detach().abs().mean()),
+            f"{self.name}_delta_norm": float(delta.detach().norm().mean()),
+        }
+        return out
+
+    def budget_tensor(self) -> torch.Tensor:
+        return self.a_fixed.weight.abs().mean() + self.b.weight.abs().mean()
+
+    def diagnostics(self) -> Dict[str, float]:
+        return dict(self._last)
 def _masked_mean(x: torch.Tensor, valid_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Mean over tokens, ignoring padding when a valid-token mask is supplied."""
     if valid_mask is None:
@@ -117,15 +216,17 @@ class HtSB12FFN(nn.Module):
     B12 adds task-specific router offsets and an optional margin-oriented loss
     at model level. The soft deltas are generated dynamically by hard routers.
     """
-
+    # NOTE: AdaptiveLowRank is a thin wrapper around several TaskConditionedLowRank
+    # experts. It provides the same public API (`forward`, `budget_tensor`,
+    # `diagnostics`) that the original HtSB12FFN expects from a low‑rank module.
     def __init__(
         self,
         d_model: int,
         dim_ff: int,
         num_tasks: int,
         task_dim: int,
-        rank_main: int,
-        rank_corr: int,
+        rank_main: Union[int, list[int]],
+        rank_corr: Union[int, list[int]],
         dropout: float = 0.1,
         alpha_max: float = 1.20,
         target_min: float = 0.25,
@@ -158,19 +259,19 @@ class HtSB12FFN(nn.Module):
         self.task_emb = nn.Embedding(num_tasks, task_dim)
         
         if router_per_task:
-            # Per-task router heads để giảm competition
+            # Per-task router heads
             self.task_router = nn.ModuleList([
                 nn.Sequential(
-                    nn.Linear(d_model + task_dim, max(64, task_dim * 2)),
+                    nn.Linear(task_dim, max(64, task_dim * 2)),
                     nn.GELU(),
                     nn.Linear(max(64, task_dim * 2), 6),
                 )
                 for _ in range(num_tasks)
             ])
         else:
-            # Shared router (default)
+            # Shared router
             self.router = nn.Sequential(
-                nn.Linear(d_model + task_dim, max(64, task_dim * 2)),
+                nn.Linear(task_dim, max(64, task_dim * 2)),
                 nn.GELU(),
                 nn.Linear(max(64, task_dim * 2), 6),
             )
@@ -178,16 +279,43 @@ class HtSB12FFN(nn.Module):
         if router_per_task:
             for tr in self.task_router:
                 nn.init.normal_(tr[-1].weight, std=0.02)
-                nn.init.zeros_(tr[-1].bias)
+                nn.init.constant_(tr[-1].bias, 1.0)  # gate bias 1 -> sigmoid(1)=0.73
         else:
             nn.init.zeros_(self.router[-1].weight)
             nn.init.zeros_(self.router[-1].bias)
         self.task_router_offset = nn.Embedding(num_tasks, 6)
         nn.init.zeros_(self.task_router_offset.weight)
 
-        self.main1 = TaskConditionedLowRank(d_model, dim_ff, rank_main, task_dim, num_tasks, name=f"{name}_main1")
-        self.main2 = TaskConditionedLowRank(dim_ff, d_model, rank_main, task_dim, num_tasks, name=f"{name}_main2")
-        self.corr1 = TaskConditionedLowRank(d_model, dim_ff, rank_corr, task_dim, num_tasks, tune_scale=0.20, name=f"{name}_corr1")
+        # If ranks are given as lists (backward compat), take the max for the basis.
+        rank_main_val = max(rank_main) if isinstance(rank_main, (list, tuple)) else rank_main
+        rank_corr_val = max(rank_corr) if isinstance(rank_corr, (list, tuple)) else rank_corr
+
+        # Input‑adaptive low‑rank projections that generate the basis from token stats.
+        self.main1 = AdaptiveBasisLowRank(
+            d_model,
+            dim_ff,
+            rank_main_val,
+            task_dim,
+            num_tasks,
+            name=f"{name}_main1",
+        )
+        self.main2 = AdaptiveBasisLowRank(
+            dim_ff,
+            d_model,
+            rank_main_val,
+            task_dim,
+            num_tasks,
+            name=f"{name}_main2",
+        )
+        self.corr1 = AdaptiveBasisLowRank(
+            d_model,
+            dim_ff,
+            rank_corr_val,
+            task_dim,
+            num_tasks,
+            tune_scale=0.20,
+            name=f"{name}_corr1",
+        )
         self.dropout = nn.Dropout(dropout)
         self._last: Dict[str, float] = {}
         self._budget = torch.tensor(0.0)
@@ -214,15 +342,15 @@ class HtSB12FFN(nn.Module):
         ctx = _masked_mean(x, valid_mask)
         te = self.task_emb(task)
         
-        # Use per-task router to avoid competition
+        # Context-free routing — depends only on task embedding, not on ctx (sequence length)
         if self.router_per_task:
             rr = torch.zeros(task.size(0), 6, device=x.device, dtype=x.dtype)
             for i in range(self.num_tasks):
                 mask = (task == i)
                 if mask.any():
-                    rr[mask] = self.task_router[i](torch.cat([ctx[mask], te[mask]], dim=-1))
+                    rr[mask] = self.task_router[i](te[mask])
         else:
-            rr = self.router(torch.cat([ctx, te], dim=-1))
+            rr = self.router(te)
         
         off = self.task_offset_scale * torch.tanh(self.task_router_offset(task))
         rr = rr + off

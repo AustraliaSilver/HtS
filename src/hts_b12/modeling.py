@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from .config import HtSB12Config
-from .layers import HtSB12FFN, SinusoidalPosition
+from .layers import AdaptiveBasisLowRank, HtSB12FFN, SinusoidalPosition
 
 
 def _masked_sequence_mean(x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -18,16 +19,75 @@ def _masked_sequence_mean(x: torch.Tensor, attention_mask: Optional[torch.Tensor
     return (x * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
 
 
+class TaskConditionedAttention(nn.Module):
+    """Multi-head attention with task-conditioned Q/K low-rank deltas.
+
+    Base Q/K/V projections are shared across tasks.  Two ``TaskConditionedLowRank``
+    modules add task-specific biases to Q and K, steering attention patterns per
+    task without requiring full task-specific Q/K matrices.
+    """
+
+    def __init__(self, config: HtSB12Config, layer_id: int):
+        super().__init__()
+        self.d_model = config.d_model
+        self.n_heads = config.n_heads
+        self.head_dim = config.d_model // config.n_heads
+        self.dropout_p = config.dropout
+
+        self.q_proj = nn.Linear(config.d_model, config.d_model)
+        self.k_proj = nn.Linear(config.d_model, config.d_model)
+        self.v_proj = nn.Linear(config.d_model, config.d_model)
+        self.out_proj = nn.Linear(config.d_model, config.d_model)
+
+        rank_attn_val = max(config.rank_task_attn) if isinstance(config.rank_task_attn, (list, tuple)) else config.rank_task_attn
+        self.q_task = AdaptiveBasisLowRank(
+            config.d_model, config.d_model, rank_attn_val,
+            config.task_dim, config.num_tasks, tune_scale=0.25,
+            name=f"l{layer_id}_attn_q",
+        )
+        self.k_task = AdaptiveBasisLowRank(
+            config.d_model, config.d_model, rank_attn_val,
+            config.task_dim, config.num_tasks, tune_scale=0.25,
+            name=f"l{layer_id}_attn_k",
+        )
+
+        for proj in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
+            nn.init.normal_(proj.weight, std=0.02)
+            nn.init.zeros_(proj.bias)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        task: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        B, T, D = x.shape
+
+        q = self.q_proj(x) + self.q_task(x, task)
+        k = self.k_proj(x) + self.k_task(x, task)
+        v = self.v_proj(x)
+
+        q = q.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = k.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+
+        attn = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        if key_padding_mask is not None:
+            attn = attn.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf"))
+        attn = F.softmax(attn, dim=-1)
+        attn = F.dropout(attn, p=self.dropout_p, training=self.training)
+
+        out = torch.matmul(attn, v)
+        out = out.transpose(1, 2).reshape(B, T, D)
+        out = self.out_proj(out)
+        return out, attn
+
+
 class HtSB12EncoderLayer(nn.Module):
     def __init__(self, config: HtSB12Config, layer_id: int):
         super().__init__()
         self.config = config
-        self.attn = nn.MultiheadAttention(
-            embed_dim=config.d_model,
-            num_heads=config.n_heads,
-            dropout=config.dropout,
-            batch_first=True,
-        )
+        self.attn = TaskConditionedAttention(config, layer_id)
         self.norm1 = nn.LayerNorm(config.d_model)
         self.norm2 = nn.LayerNorm(config.d_model)
         self.dropout = nn.Dropout(config.dropout)
@@ -55,13 +115,13 @@ class HtSB12EncoderLayer(nn.Module):
         valid_mask = None if key_padding_mask is None else (~key_padding_mask).to(dtype=x.dtype)
         if self.config.norm_first:
             y = self.norm1(x)
-            attn_out, _ = self.attn(y, y, y, key_padding_mask=key_padding_mask, need_weights=False)
+            attn_out, _ = self.attn(y, task, key_padding_mask=key_padding_mask)
             x = x + self.dropout(attn_out)
             ffn_out = self.ffn(self.norm2(x), task, valid_mask=valid_mask)
             x = x + self.dropout(ffn_out)
             return x
 
-        attn_out, _ = self.attn(x, x, x, key_padding_mask=key_padding_mask, need_weights=False)
+        attn_out, _ = self.attn(x, task, key_padding_mask=key_padding_mask)
         x = self.norm1(x + self.dropout(attn_out))
         ffn_out = self.ffn(x, task, valid_mask=valid_mask)
         x = self.norm2(x + self.dropout(ffn_out))
