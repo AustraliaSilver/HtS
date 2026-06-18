@@ -107,13 +107,21 @@ class TaskConditionedLowRank(nn.Module):
         return dict(self._last)
 
 class AdaptiveBasisLowRank(nn.Module):
-    """Input‑adaptive low‑rank projection.
+    """Input‑adaptive low‑rank projection with per‑token modulation.
 
     The low‑rank projection matrix ``a`` is *generated on‑the‑fly* from the
     token statistics of the input sequence rather than being a fixed matrix.
     This allows the low‑rank subspace to adapt to different input patterns
-    (short vs long sequences, OOD vs ID distributions), addressing the core
-    limitation identified in the OOD analysis.
+    (short vs long sequences, OOD vs ID distributions).
+
+    Two key extensions over the basic version:
+    * **Richer stats**: concatenates ``mean`` and ``std`` of the LN‑stabilised
+      input, so the basis can respond to the **spread** of token representations
+      (critical for counting where many target tokens change the variance).
+    * **Per‑token modulation**: a lightweight ``Linear(in_features → rank)``
+      adds a position‑specific offset to each token's rank‑space projection.
+      This lets each token (e.g. 'a' vs 'b') carve a different delta direction,
+      directly addressing the counting bottleneck.
 
     The router remains **context‑free** (task embedding only), preserving
     the length‑invariance that was found to be critical in the benchmark.
@@ -129,24 +137,37 @@ class AdaptiveBasisLowRank(nn.Module):
         hidden: Optional[int] = None,
         tune_scale: float = 0.25,
         name: str = "adaptive_basis",
+        use_std: bool = True,
+        use_pos_mod: bool = True,
+        use_ctx_basis: bool = False,
     ) -> None:
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.rank = rank
         self.name = name
+        self.use_std = use_std
+        self.use_pos_mod = use_pos_mod
+        self.use_ctx_basis = use_ctx_basis
         hidden = hidden or max(32, task_dim * 2)
 
         self.task_emb = nn.Embedding(num_tasks, task_dim)
 
         # Fixed base projection.
         self.a_fixed = nn.Linear(in_features, rank, bias=False)
+
         # Hypernetwork: input statistics → delta for the projection matrix.
+        stats_dim = in_features * (2 if use_std else 1) + (in_features if use_ctx_basis else 0)
         self.a_gen = nn.Sequential(
-            nn.Linear(in_features, max(32, in_features // 4)),
+            nn.Linear(stats_dim, max(32, in_features // 4)),
             nn.GELU(),
             nn.Linear(max(32, in_features // 4), in_features * rank),
         )
+        # Per‑token modulation: each token gets its own rank‑space offset.
+        if use_pos_mod:
+            self.pos_mod = nn.Linear(in_features, rank, bias=False)
+            nn.init.zeros_(self.pos_mod.weight)
+
         self.b = nn.Linear(rank, out_features, bias=False)
         self.router = nn.Sequential(
             nn.Linear(task_dim, hidden),
@@ -168,19 +189,31 @@ class AdaptiveBasisLowRank(nn.Module):
         coeff = 1.0 + self.tune_scale * torch.tanh(self.router(te))
         x_ln = F.layer_norm(x, [self.in_features])
 
-        # Generate adaptive projection offset from input token statistics.
-        x_stats = x_ln.mean(dim=1)  # [B, d_model]
-        delta = self.a_gen(x_stats)  # [B, in_features * rank]
+        # Richer input statistics (mean + optional std + optional ctx).
+        stats_parts = [x_ln.mean(dim=1)]
+        if self.use_std:
+            stats_parts.append(x_ln.std(dim=1))
+        if self.use_ctx_basis and ctx is not None:
+            stats_parts.append(ctx)
+        x_stats = torch.cat(stats_parts, dim=-1)  # [B, stats_dim]
+
+        delta = self.a_gen(x_stats)
         delta = delta.view(-1, self.rank, self.in_features)  # [B, rank, in_features]
         W_a = self.a_fixed.weight[None, :, :] + delta  # [B, rank, in_features]
 
-        z = torch.bmm(x_ln, W_a.transpose(1, 2)) * coeff[:, None, :]  # [B, T, rank]
-        out = self.b(z)  # [B, T, out_features]
+        z_base = torch.bmm(x_ln, W_a.transpose(1, 2))  # [B, T, rank]
+        if self.use_pos_mod:
+            z_mod = self.pos_mod(x_ln)  # [B, T, rank]
+        else:
+            z_mod = 0
+        z = (z_base + z_mod) * coeff[:, None, :]
+        out = self.b(z)
 
         self._last = {
             f"{self.name}_rank": float(self.rank),
             f"{self.name}_coeff_abs": float(coeff.detach().abs().mean()),
             f"{self.name}_delta_norm": float(delta.detach().norm().mean()),
+            f"{self.name}_pos_mod_norm": float(self.pos_mod.weight.detach().norm().mean()) if self.use_pos_mod else 0.0,
         }
         return out
 

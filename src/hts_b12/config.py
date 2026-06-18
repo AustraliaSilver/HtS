@@ -61,6 +61,11 @@ class HtSB12Config:
     
     # Router architecture.
     router_per_task: bool = True  # Separate router per task vs shared router
+    
+    # Adaptive‑basis enhancements (held‑out / counting improvements).
+    use_std_basis: bool = True       # Use mean+std (vs just mean) for basis generation
+    use_pos_mod_basis: bool = True   # Per‑token modulation in low‑rank projection
+    use_ctx_basis: bool = False      # Use context vector in basis generation
 
     def __post_init__(self) -> None:
         positive_ints = {
