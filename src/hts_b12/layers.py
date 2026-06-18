@@ -143,7 +143,7 @@ class AdaptiveBasisLowRank(nn.Module):
         use_task_in_basis: bool = True,
         dropout: float = 0.0,
         use_dual_delta: bool = False,
-        dual_delta_scale: float = 0.1,
+        dual_delta_scale: float = 0.05,
     ) -> None:
         super().__init__()
         self.in_features = in_features
