@@ -68,6 +68,7 @@ class HtSB12Config:
     use_pos_mod_basis: bool = True   # Per‑token modulation in low‑rank projection
     use_ctx_basis: bool = False      # Use context vector in basis generation
     use_task_in_basis: bool = True   # Use task embedding in basis generation
+    use_mean_basis: bool = True      # Use input mean in basis generation (False = purely task-driven)
     use_dual_delta: bool = True      # Small context-aware auxiliary delta (near-zero init)
     dropout_basis: float = 0.0       # Dropout inside AdaptiveBasisLowRank (tune on Kaggle for long runs)
 

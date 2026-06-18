@@ -144,12 +144,14 @@ class AdaptiveBasisLowRank(nn.Module):
         dropout: float = 0.0,
         use_dual_delta: bool = False,
         dual_delta_scale: float = 0.05,
+        use_mean_basis: bool = True,
     ) -> None:
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.rank = rank
         self.name = name
+        self.use_mean_basis = use_mean_basis
         self.use_std = use_std
         self.use_pos_mod = use_pos_mod
         self.use_ctx_basis = use_ctx_basis
@@ -164,7 +166,9 @@ class AdaptiveBasisLowRank(nn.Module):
         self.a_fixed = nn.Linear(in_features, rank, bias=False)
 
         # Hypernetwork: input statistics → delta for the projection matrix.
-        stats_dim = in_features * (2 if use_std else 1) + (in_features if use_ctx_basis else 0) + (task_dim if use_task_in_basis else 0)
+        mean_factor = 1 if use_mean_basis else 0
+        std_factor = 1 if use_std else 0
+        stats_dim = in_features * (mean_factor + std_factor) + (in_features if use_ctx_basis else 0) + (task_dim if use_task_in_basis else 0)
         self.a_gen = nn.Sequential(
             nn.Linear(stats_dim, max(32, in_features // 4)),
             nn.GELU(),
@@ -207,7 +211,9 @@ class AdaptiveBasisLowRank(nn.Module):
         x_ln = F.layer_norm(x, [self.in_features])
 
         # Richer input statistics (mean + optional std + optional ctx + task basis).
-        stats_parts = [x_ln.mean(dim=1)]
+        stats_parts = []
+        if self.use_mean_basis:
+            stats_parts.append(x_ln.mean(dim=1))
         if self.use_std:
             stats_parts.append(x_ln.std(dim=1))
         if self.use_ctx_basis and ctx is not None:
@@ -303,6 +309,7 @@ class HtSB12FFN(nn.Module):
         use_ctx_basis: bool = False,
         use_task_in_basis: bool = True,
         use_dual_delta: bool = False,
+        use_mean_basis: bool = True,
     ) -> None:
         super().__init__()
         self.name = name
@@ -324,6 +331,7 @@ class HtSB12FFN(nn.Module):
         self.use_ctx_basis = use_ctx_basis
         self.use_task_in_basis = use_task_in_basis
         self.use_dual_delta = use_dual_delta
+        self.use_mean_basis = use_mean_basis
 
         self.base_l1 = nn.Linear(d_model, dim_ff)
         self.base_l2 = nn.Linear(dim_ff, d_model)
@@ -375,6 +383,7 @@ class HtSB12FFN(nn.Module):
             use_ctx_basis=use_ctx_basis,
             use_task_in_basis=use_task_in_basis,
             use_dual_delta=use_dual_delta,
+            use_mean_basis=use_mean_basis,
         )
         self.main2 = AdaptiveBasisLowRank(
             dim_ff,
@@ -389,6 +398,7 @@ class HtSB12FFN(nn.Module):
             use_ctx_basis=use_ctx_basis,
             use_task_in_basis=use_task_in_basis,
             use_dual_delta=use_dual_delta,
+            use_mean_basis=use_mean_basis,
         )
         self.corr1 = AdaptiveBasisLowRank(
             d_model,
@@ -404,6 +414,7 @@ class HtSB12FFN(nn.Module):
             use_ctx_basis=use_ctx_basis,
             use_task_in_basis=use_task_in_basis,
             use_dual_delta=use_dual_delta,
+            use_mean_basis=use_mean_basis,
         )
         self.dropout = nn.Dropout(dropout)
         self._last: Dict[str, float] = {}

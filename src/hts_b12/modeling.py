@@ -50,6 +50,7 @@ class TaskConditionedAttention(nn.Module):
             use_ctx_basis=config.use_ctx_basis,
             use_task_in_basis=config.use_task_in_basis,
             use_dual_delta=config.use_dual_delta,
+            use_mean_basis=config.use_mean_basis,
         )
         self.k_task = AdaptiveBasisLowRank(
             config.d_model, config.d_model, rank_attn_val,
@@ -61,6 +62,7 @@ class TaskConditionedAttention(nn.Module):
             use_ctx_basis=config.use_ctx_basis,
             use_task_in_basis=config.use_task_in_basis,
             use_dual_delta=config.use_dual_delta,
+            use_mean_basis=config.use_mean_basis,
         )
 
         for proj in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
@@ -133,6 +135,7 @@ class HtSB12EncoderLayer(nn.Module):
             use_ctx_basis=config.use_ctx_basis,
             use_task_in_basis=config.use_task_in_basis,
             use_dual_delta=config.use_dual_delta,
+            use_mean_basis=config.use_mean_basis,
         )
 
     def forward(self, x: torch.Tensor, task: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:

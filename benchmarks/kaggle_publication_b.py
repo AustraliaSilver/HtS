@@ -507,6 +507,7 @@ def build_hts_config(max_model_length: int, num_classes: int, task_mix: tuple = 
         router_per_task=True,
         use_pos_mod_basis=False,
         use_task_in_basis=True,
+        use_mean_basis=False,
         use_ctx_basis=False,
         use_dual_delta=False,
         use_std_basis=False,
