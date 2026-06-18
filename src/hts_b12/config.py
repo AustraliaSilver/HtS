@@ -66,6 +66,7 @@ class HtSB12Config:
     use_std_basis: bool = True       # Use mean+std (vs just mean) for basis generation
     use_pos_mod_basis: bool = True   # Per‑token modulation in low‑rank projection
     use_ctx_basis: bool = False      # Use context vector in basis generation
+    use_task_in_basis: bool = True   # Use task embedding in basis generation
 
     def __post_init__(self) -> None:
         positive_ints = {

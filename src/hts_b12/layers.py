@@ -140,6 +140,7 @@ class AdaptiveBasisLowRank(nn.Module):
         use_std: bool = True,
         use_pos_mod: bool = True,
         use_ctx_basis: bool = False,
+        use_task_in_basis: bool = True,
     ) -> None:
         super().__init__()
         self.in_features = in_features
@@ -149,6 +150,7 @@ class AdaptiveBasisLowRank(nn.Module):
         self.use_std = use_std
         self.use_pos_mod = use_pos_mod
         self.use_ctx_basis = use_ctx_basis
+        self.use_task_in_basis = use_task_in_basis
         hidden = hidden or max(32, task_dim * 2)
 
         self.task_emb = nn.Embedding(num_tasks, task_dim)
@@ -157,7 +159,7 @@ class AdaptiveBasisLowRank(nn.Module):
         self.a_fixed = nn.Linear(in_features, rank, bias=False)
 
         # Hypernetwork: input statistics → delta for the projection matrix.
-        stats_dim = in_features * (2 if use_std else 1) + (in_features if use_ctx_basis else 0)
+        stats_dim = in_features * (2 if use_std else 1) + (in_features if use_ctx_basis else 0) + (task_dim if use_task_in_basis else 0)
         self.a_gen = nn.Sequential(
             nn.Linear(stats_dim, max(32, in_features // 4)),
             nn.GELU(),
@@ -189,12 +191,14 @@ class AdaptiveBasisLowRank(nn.Module):
         coeff = 1.0 + self.tune_scale * torch.tanh(self.router(te))
         x_ln = F.layer_norm(x, [self.in_features])
 
-        # Richer input statistics (mean + optional std + optional ctx).
+        # Richer input statistics (mean + optional std + optional ctx + task basis).
         stats_parts = [x_ln.mean(dim=1)]
         if self.use_std:
             stats_parts.append(x_ln.std(dim=1))
         if self.use_ctx_basis and ctx is not None:
             stats_parts.append(ctx)
+        if self.use_task_in_basis:
+            stats_parts.append(te)
         x_stats = torch.cat(stats_parts, dim=-1)  # [B, stats_dim]
 
         delta = self.a_gen(x_stats)
