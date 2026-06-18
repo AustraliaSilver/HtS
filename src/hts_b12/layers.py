@@ -141,6 +141,7 @@ class AdaptiveBasisLowRank(nn.Module):
         use_pos_mod: bool = True,
         use_ctx_basis: bool = False,
         use_task_in_basis: bool = True,
+        dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self.in_features = in_features
@@ -176,6 +177,7 @@ class AdaptiveBasisLowRank(nn.Module):
             nn.GELU(),
             nn.Linear(hidden, rank),
         )
+        self.dropout = nn.Dropout(dropout)
         self.tune_scale = tune_scale
         nn.init.normal_(self.a_fixed.weight, std=0.02)
         nn.init.normal_(self.b.weight, std=0.02)
@@ -185,6 +187,7 @@ class AdaptiveBasisLowRank(nn.Module):
         nn.init.zeros_(self.a_gen[-1].weight)
         nn.init.zeros_(self.a_gen[-1].bias)
         self._last: Dict[str, float] = {}
+
 
     def forward(self, x: torch.Tensor, task: torch.Tensor, ctx: Optional[torch.Tensor] = None) -> torch.Tensor:
         te = self.task_emb(task)
@@ -211,6 +214,7 @@ class AdaptiveBasisLowRank(nn.Module):
         else:
             z_mod = 0
         z = (z_base + z_mod) * coeff[:, None, :]
+        z = self.dropout(z)  # regularize the low-rank projection
         out = self.b(z)
 
         self._last = {
@@ -275,6 +279,11 @@ class HtSB12FFN(nn.Module):
         corr_ceiling: float = 0.35,
         name: str = "b12ffn",
         router_per_task: bool = True,
+        dropout_basis: float = 0.0,
+        use_std_basis: bool = True,
+        use_pos_mod_basis: bool = True,
+        use_ctx_basis: bool = False,
+        use_task_in_basis: bool = True,
     ) -> None:
         super().__init__()
         self.name = name
@@ -290,6 +299,11 @@ class HtSB12FFN(nn.Module):
         self.corr_ceiling = corr_ceiling
         self.num_tasks = num_tasks
         self.router_per_task = router_per_task
+        self.dropout_basis = dropout_basis
+        self.use_std_basis = use_std_basis
+        self.use_pos_mod_basis = use_pos_mod_basis
+        self.use_ctx_basis = use_ctx_basis
+        self.use_task_in_basis = use_task_in_basis
 
         self.base_l1 = nn.Linear(d_model, dim_ff)
         self.base_l2 = nn.Linear(dim_ff, d_model)
@@ -335,6 +349,11 @@ class HtSB12FFN(nn.Module):
             task_dim,
             num_tasks,
             name=f"{name}_main1",
+            dropout=dropout_basis,
+            use_std=use_std_basis,
+            use_pos_mod=use_pos_mod_basis,
+            use_ctx_basis=use_ctx_basis,
+            use_task_in_basis=use_task_in_basis,
         )
         self.main2 = AdaptiveBasisLowRank(
             dim_ff,
@@ -343,6 +362,11 @@ class HtSB12FFN(nn.Module):
             task_dim,
             num_tasks,
             name=f"{name}_main2",
+            dropout=dropout_basis,
+            use_std=use_std_basis,
+            use_pos_mod=use_pos_mod_basis,
+            use_ctx_basis=use_ctx_basis,
+            use_task_in_basis=use_task_in_basis,
         )
         self.corr1 = AdaptiveBasisLowRank(
             d_model,
@@ -352,6 +376,11 @@ class HtSB12FFN(nn.Module):
             num_tasks,
             tune_scale=0.20,
             name=f"{name}_corr1",
+            dropout=dropout_basis,
+            use_std=use_std_basis,
+            use_pos_mod=use_pos_mod_basis,
+            use_ctx_basis=use_ctx_basis,
+            use_task_in_basis=use_task_in_basis,
         )
         self.dropout = nn.Dropout(dropout)
         self._last: Dict[str, float] = {}

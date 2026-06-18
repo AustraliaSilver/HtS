@@ -356,30 +356,35 @@ def summarize_runs(runs: Sequence[Dict[str, Any]], suites: Sequence[str]) -> Lis
     return rows
 
 
-def build_hts_config(max_model_length: int, num_classes: int) -> HtSB12Config:
+def build_hts_config(max_model_length: int, num_classes: int, task_mix: tuple = ("length", "count_a", "count_b", "count_digit")) -> HtSB12Config:
+    num_tasks = len(task_mix)  # Auto-calculate from task mix
     return HtSB12Config(
         vocab_size=128,
         max_length=max_model_length,
-        num_tasks=8,
+        num_tasks=num_tasks,
         num_classes=num_classes,
-        d_model=80,
+        d_model=48,
         n_heads=4,
         num_layers=2,
-        dim_ff=128,
-        task_dim=16,
+        dim_ff=64,
+        task_dim=12,
         rank_main=8,
         rank_corr=4,
+        rank_task_attn=4,
         dropout=0.0,
         use_cls_token=True,
         pool="cls",
         alpha_max=1.05,
         target_min=0.20,
-        target_max=0.75,
-        corr_alpha_max=0.35,
-        corr_gain=3.0,
-        task_offset_scale=0.20,
-        ratio_ceiling=0.80,
-        corr_ceiling=0.25,
+        target_max=0.90,
+        corr_alpha_max=0.55,
+        corr_gain=6.0,
+        task_offset_scale=0.30,
+        ratio_ceiling=2.0,
+        corr_ceiling=1.0,
+        router_per_task=True,
+        use_pos_mod_basis=False,
+        use_task_in_basis=True,
     )
 
 

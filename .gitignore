@@ -17,3 +17,6 @@ runs/
 validation_a_results/
 publication_*_results*/
 publication_*_results_dualgpu/
+
+scratch/
+.kilo/

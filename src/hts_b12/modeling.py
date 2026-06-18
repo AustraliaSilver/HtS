@@ -44,11 +44,21 @@ class TaskConditionedAttention(nn.Module):
             config.d_model, config.d_model, rank_attn_val,
             config.task_dim, config.num_tasks, tune_scale=0.25,
             name=f"l{layer_id}_attn_q",
+            dropout=config.dropout_basis,
+            use_std=config.use_std_basis,
+            use_pos_mod=config.use_pos_mod_basis,
+            use_ctx_basis=config.use_ctx_basis,
+            use_task_in_basis=config.use_task_in_basis,
         )
         self.k_task = AdaptiveBasisLowRank(
             config.d_model, config.d_model, rank_attn_val,
             config.task_dim, config.num_tasks, tune_scale=0.25,
             name=f"l{layer_id}_attn_k",
+            dropout=config.dropout_basis,
+            use_std=config.use_std_basis,
+            use_pos_mod=config.use_pos_mod_basis,
+            use_ctx_basis=config.use_ctx_basis,
+            use_task_in_basis=config.use_task_in_basis,
         )
 
         for proj in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
@@ -109,6 +119,11 @@ class HtSB12EncoderLayer(nn.Module):
             corr_ceiling=config.corr_ceiling,
             name=f"layer{layer_id}_b12",
             router_per_task=config.router_per_task,
+            dropout_basis=config.dropout_basis,
+            use_std_basis=config.use_std_basis,
+            use_pos_mod_basis=config.use_pos_mod_basis,
+            use_ctx_basis=config.use_ctx_basis,
+            use_task_in_basis=config.use_task_in_basis,
         )
 
     def forward(self, x: torch.Tensor, task: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
