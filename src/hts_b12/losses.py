@@ -46,6 +46,7 @@ class HtSB12Objective(nn.Module):
         binary_reg: float = 0.0,
         task_offset_reg: float = 0.0,
         warmup_steps: int = 0,
+        label_smoothing: float = 0.0,
     ) -> None:
         super().__init__()
         self.margin = MarginLoss(margin)
@@ -55,9 +56,10 @@ class HtSB12Objective(nn.Module):
         self.binary_reg = binary_reg
         self.task_offset_reg = task_offset_reg
         self.warmup_steps = warmup_steps
+        self.label_smoothing = label_smoothing
 
     def forward(self, model: nn.Module, logits: torch.Tensor, labels: torch.Tensor, step: int = 0) -> LossBreakdown:
-        ce = F.cross_entropy(logits, labels)
+        ce = F.cross_entropy(logits, labels, label_smoothing=self.label_smoothing)
         ml = self.margin(logits, labels)
         warm = 1.0 if self.warmup_steps <= 0 else min(1.0, step / max(1, self.warmup_steps))
         dev = logits.device

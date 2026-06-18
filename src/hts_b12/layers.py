@@ -142,6 +142,8 @@ class AdaptiveBasisLowRank(nn.Module):
         use_ctx_basis: bool = False,
         use_task_in_basis: bool = True,
         dropout: float = 0.0,
+        use_dual_delta: bool = False,
+        dual_delta_scale: float = 0.05,
     ) -> None:
         super().__init__()
         self.in_features = in_features
@@ -152,6 +154,8 @@ class AdaptiveBasisLowRank(nn.Module):
         self.use_pos_mod = use_pos_mod
         self.use_ctx_basis = use_ctx_basis
         self.use_task_in_basis = use_task_in_basis
+        self.use_dual_delta = use_dual_delta
+        self.dual_delta_scale = dual_delta_scale
         hidden = hidden or max(32, task_dim * 2)
 
         self.task_emb = nn.Embedding(num_tasks, task_dim)
@@ -172,6 +176,14 @@ class AdaptiveBasisLowRank(nn.Module):
             nn.init.zeros_(self.pos_mod.weight)
 
         self.b = nn.Linear(rank, out_features, bias=False)
+        if use_dual_delta:
+            self.dual_delta_gen = nn.Sequential(
+                nn.Linear(in_features, max(8, in_features // 8)),
+                nn.GELU(),
+                nn.Linear(max(8, in_features // 8), in_features * rank),
+            )
+            nn.init.zeros_(self.dual_delta_gen[-1].weight)
+            nn.init.zeros_(self.dual_delta_gen[-1].bias)
         self.router = nn.Sequential(
             nn.Linear(task_dim, hidden),
             nn.GELU(),
@@ -206,6 +218,11 @@ class AdaptiveBasisLowRank(nn.Module):
 
         delta = self.a_gen(x_stats)
         delta = delta.view(-1, self.rank, self.in_features)  # [B, rank, in_features]
+
+        if self.use_dual_delta and ctx is not None:
+            aux_delta = self.dual_delta_gen(ctx).view(-1, self.rank, self.in_features)
+            delta = delta + self.dual_delta_scale * aux_delta
+
         W_a = self.a_fixed.weight[None, :, :] + delta  # [B, rank, in_features]
 
         z_base = torch.bmm(x_ln, W_a.transpose(1, 2))  # [B, T, rank]
@@ -222,6 +239,7 @@ class AdaptiveBasisLowRank(nn.Module):
             f"{self.name}_coeff_abs": float(coeff.detach().abs().mean()),
             f"{self.name}_delta_norm": float(delta.detach().norm().mean()),
             f"{self.name}_pos_mod_norm": float(self.pos_mod.weight.detach().norm().mean()) if self.use_pos_mod else 0.0,
+            f"{self.name}_dual_delta_norm": float(aux_delta.detach().norm().mean()) if self.use_dual_delta and ctx is not None else 0.0,
         }
         return out
 
@@ -284,6 +302,7 @@ class HtSB12FFN(nn.Module):
         use_pos_mod_basis: bool = True,
         use_ctx_basis: bool = False,
         use_task_in_basis: bool = True,
+        use_dual_delta: bool = False,
     ) -> None:
         super().__init__()
         self.name = name
@@ -304,6 +323,7 @@ class HtSB12FFN(nn.Module):
         self.use_pos_mod_basis = use_pos_mod_basis
         self.use_ctx_basis = use_ctx_basis
         self.use_task_in_basis = use_task_in_basis
+        self.use_dual_delta = use_dual_delta
 
         self.base_l1 = nn.Linear(d_model, dim_ff)
         self.base_l2 = nn.Linear(dim_ff, d_model)
@@ -354,6 +374,7 @@ class HtSB12FFN(nn.Module):
             use_pos_mod=use_pos_mod_basis,
             use_ctx_basis=use_ctx_basis,
             use_task_in_basis=use_task_in_basis,
+            use_dual_delta=use_dual_delta,
         )
         self.main2 = AdaptiveBasisLowRank(
             dim_ff,
@@ -367,6 +388,7 @@ class HtSB12FFN(nn.Module):
             use_pos_mod=use_pos_mod_basis,
             use_ctx_basis=use_ctx_basis,
             use_task_in_basis=use_task_in_basis,
+            use_dual_delta=use_dual_delta,
         )
         self.corr1 = AdaptiveBasisLowRank(
             d_model,
@@ -381,6 +403,7 @@ class HtSB12FFN(nn.Module):
             use_pos_mod=use_pos_mod_basis,
             use_ctx_basis=use_ctx_basis,
             use_task_in_basis=use_task_in_basis,
+            use_dual_delta=use_dual_delta,
         )
         self.dropout = nn.Dropout(dropout)
         self._last: Dict[str, float] = {}

@@ -58,6 +58,7 @@ class HtSB12Config:
     budget_reg: float = 0.0
     binary_reg: float = 0.0
     task_offset_reg: float = 0.0
+    label_smoothing: float = 0.1
     
     # Router architecture.
     router_per_task: bool = True  # Separate router per task vs shared router
@@ -67,6 +68,7 @@ class HtSB12Config:
     use_pos_mod_basis: bool = True   # Per‑token modulation in low‑rank projection
     use_ctx_basis: bool = False      # Use context vector in basis generation
     use_task_in_basis: bool = True   # Use task embedding in basis generation
+    use_dual_delta: bool = True      # Small context-aware auxiliary delta (near-zero init)
     dropout_basis: float = 0.0       # Dropout inside AdaptiveBasisLowRank (tune on Kaggle for long runs)
 
     def __post_init__(self) -> None:

@@ -49,6 +49,7 @@ class TaskConditionedAttention(nn.Module):
             use_pos_mod=config.use_pos_mod_basis,
             use_ctx_basis=config.use_ctx_basis,
             use_task_in_basis=config.use_task_in_basis,
+            use_dual_delta=config.use_dual_delta,
         )
         self.k_task = AdaptiveBasisLowRank(
             config.d_model, config.d_model, rank_attn_val,
@@ -59,6 +60,7 @@ class TaskConditionedAttention(nn.Module):
             use_pos_mod=config.use_pos_mod_basis,
             use_ctx_basis=config.use_ctx_basis,
             use_task_in_basis=config.use_task_in_basis,
+            use_dual_delta=config.use_dual_delta,
         )
 
         for proj in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
@@ -73,8 +75,14 @@ class TaskConditionedAttention(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B, T, D = x.shape
 
-        q = self.q_proj(x) + self.q_task(x, task)
-        k = self.k_proj(x) + self.k_task(x, task)
+        if key_padding_mask is not None:
+            m = (~key_padding_mask).to(dtype=x.dtype).unsqueeze(-1)
+            ctx = (x * m).sum(dim=1) / m.sum(dim=1).clamp_min(1.0)
+        else:
+            ctx = x.mean(dim=1)
+
+        q = self.q_proj(x) + self.q_task(x, task, ctx)
+        k = self.k_proj(x) + self.k_task(x, task, ctx)
         v = self.v_proj(x)
 
         q = q.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
@@ -124,6 +132,7 @@ class HtSB12EncoderLayer(nn.Module):
             use_pos_mod_basis=config.use_pos_mod_basis,
             use_ctx_basis=config.use_ctx_basis,
             use_task_in_basis=config.use_task_in_basis,
+            use_dual_delta=config.use_dual_delta,
         )
 
     def forward(self, x: torch.Tensor, task: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
