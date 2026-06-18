@@ -51,6 +51,7 @@ if _SRC_DIR.exists() and str(_SRC_DIR) not in sys.path:
 
 from hts_b12 import HtSB12Classifier, HtSB12Config, TransformerClassifier, TrainConfig, accuracy, count_parameters
 from hts_b12.losses import HtSB12Objective
+from hts_b12.ood_heads import HtSB12DigitClassifier
 from hts_b12.training import cosine_with_warmup
 
 RESULTS_DIR = Path("publication_b_results")
@@ -323,6 +324,126 @@ def train_one(
     }
 
 
+def eval_digit_accuracy_and_loss(
+    model: torch.nn.Module,
+    batch_fn: Callable[[int, torch.device | str, int], Batch],
+    batch_size: int,
+    device: torch.device | str,
+    seed_base: int,
+    batches: int,
+) -> Tuple[float, float]:
+    model.eval()
+    accs: List[float] = []
+    with torch.no_grad():
+        for i in range(batches):
+            batch = batch_fn(batch_size, device, seed_base + i)
+            outputs = model(batch.input_ids, batch.task_ids, batch.attention_mask)
+            accs.append(float(model.digit_accuracy(outputs, batch.labels)))
+    return float(np.mean(accs)), 0.0
+
+
+def train_one_digit(
+    model_name: str,
+    model_factory: Callable[[], torch.nn.Module],
+    train_batch_fn: Callable[[int, torch.device | str, int], Batch],
+    val_batch_fn: Callable[[int, torch.device | str, int], Batch],
+    test_suites: Dict[str, Callable[[int, torch.device | str, int], Batch]],
+    train_config: TrainConfig,
+    seed: int,
+    eval_batches: int,
+) -> Dict[str, Any]:
+    seed_everything(seed)
+    device = train_config.device if train_config.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
+    model = model_factory().to(device)
+    model.train()
+
+    optim = torch.optim.AdamW(model.parameters(), lr=train_config.lr, weight_decay=train_config.weight_decay)
+
+    best_val = -1.0
+    best_step = 0
+    best_state = None
+    prev_loss = None
+    spikes = 0
+    max_spike = 0.0
+    final_loss = float("nan")
+    train_log: List[Dict[str, Any]] = []
+
+    for step in range(1, train_config.steps + 1):
+        lr = cosine_with_warmup(step, train_config.steps, train_config.warmup_steps, train_config.lr)
+        for g in optim.param_groups:
+            g["lr"] = lr
+
+        batch = train_batch_fn(train_config.batch_size, device, seed * 1_000_000 + step)
+        outputs = model(batch.input_ids, batch.task_ids, batch.attention_mask)
+        loss = model.digit_loss(outputs, batch.labels)
+        if hasattr(model, "hts_regularizers"):
+            budget, binary, ratio_penalty, task_offset_l2 = model.hts_regularizers()
+            loss = loss + 1e-3 * budget + 1e-3 * binary + 0.01 * ratio_penalty + 1e-3 * task_offset_l2
+        optim.zero_grad(set_to_none=True)
+        loss.backward()
+        if train_config.grad_clip:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.grad_clip)
+        optim.step()
+
+        final_loss = float(loss.detach().cpu())
+        if prev_loss is not None and prev_loss > 1e-8:
+            ratio = final_loss / prev_loss
+            if ratio > 1.5:
+                spikes += 1
+                max_spike = max(max_spike, ratio)
+        prev_loss = final_loss
+
+        if step % train_config.eval_every == 0 or step == train_config.steps:
+            val_acc, val_loss = eval_digit_accuracy_and_loss(
+                model, val_batch_fn, min(512, train_config.batch_size * 2), device, seed * 2_000_000 + step * 100, eval_batches
+            )
+            if val_acc > best_val:
+                best_val = val_acc
+                best_step = step
+                best_state = copy.deepcopy({k: v.detach().cpu() for k, v in model.state_dict().items()})
+            row = {
+                "model": model_name,
+                "seed": seed,
+                "step": step,
+                "train_loss": round(final_loss, 4),
+                "val_acc": round(val_acc * 100, 3),
+                "val_ce_loss": round(val_loss, 4),
+                "lr": lr,
+            }
+            if hasattr(model, "hts_diagnostics"):
+                diag = model.hts_diagnostics()
+                for k in ("l0_layer0_b12_delta_base_ratio", "l0_layer0_b12_gate_main", "l0_layer0_b12_gate_corr"):
+                    if k in diag:
+                        row[k] = round(diag[k], 5)
+            train_log.append(row)
+            model.train()
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        model.to(device)
+
+    suite_results: Dict[str, Any] = {}
+    for suite_name, suite_fn in test_suites.items():
+        acc, ce_loss = eval_digit_accuracy_and_loss(
+            model, suite_fn, min(1024, max(512, train_config.batch_size * 2)), device, seed * 3_000_000 + len(suite_name) * 1000, eval_batches
+        )
+        suite_results[f"{suite_name}_acc"] = acc
+        suite_results[f"{suite_name}_ce_loss"] = ce_loss
+
+    return {
+        "model": model_name,
+        "seed": seed,
+        "params": count_parameters(model),
+        "best_val": best_val,
+        "best_step": best_step,
+        "spikes": spikes,
+        "max_spike": max_spike,
+        "final_loss": final_loss,
+        **suite_results,
+        "train_log": train_log,
+    }
+
+
 def mean_std(values: Sequence[float]) -> Tuple[float, float, float, float]:
     arr = np.array(values, dtype=float)
     return float(arr.mean()), float(arr.std(ddof=0)), float(arr.min()), float(arr.max())
@@ -484,6 +605,7 @@ def main() -> None:
     parser.add_argument("--num-classes", type=int, default=256)
     parser.add_argument("--include-small-transformer", action="store_true", help="Also run smaller Transformer baseline")
     parser.add_argument("--include-ablation", action="store_true", help="Run HtS-NoSoft ablation; slower")
+    parser.add_argument("--use-digit-head", action="store_true", help="Use digit decomposition head instead of standard classifier")
     parser.add_argument("--output-dir", type=str, default=str(RESULTS_DIR))
     args = parser.parse_args()
 
@@ -513,12 +635,17 @@ def main() -> None:
     tf_small_cfg = build_transformer_config("small", args.max_eval_length, args.num_classes)
     tf_pm_cfg = build_transformer_config("param_matched", args.max_eval_length, args.num_classes)
 
-    models: List[Tuple[str, Callable[[], torch.nn.Module]]] = [
-        ("HtS-B12", lambda: HtSB12Classifier(hts_cfg)),
+    hts_models: List[Tuple[str, Callable[[], torch.nn.Module]]]
+    if args.use_digit_head:
+        hts_models = [("HtS-B12-Digit", lambda: HtSB12DigitClassifier(hts_cfg, max_digit_value=args.num_classes - 1))]
+    else:
+        hts_models = [("HtS-B12", lambda: HtSB12Classifier(hts_cfg))]
+
+    transformer_models: List[Tuple[str, Callable[[], torch.nn.Module]]] = [
         ("Transformer-ParamMatched", lambda: TransformerClassifier(tf_pm_cfg)),
     ]
     if args.include_small_transformer:
-        models.append(("Transformer-Small", lambda: TransformerClassifier(tf_small_cfg)))
+        transformer_models.append(("Transformer-Small", lambda: TransformerClassifier(tf_small_cfg)))
     if args.include_ablation:
         def no_soft_factory() -> torch.nn.Module:
             cfg = copy.deepcopy(hts_cfg)
@@ -526,7 +653,9 @@ def main() -> None:
             cfg.corr_alpha_max = 0.0
             cfg.corr_gain = 0.0
             return HtSB12Classifier(cfg)
-        models.append(("HtS-NoSoft", no_soft_factory))
+        transformer_models.append(("HtS-NoSoft", no_soft_factory))
+
+    models = hts_models + transformer_models
 
     print("\nParameter counts:")
     for name, factory in models:
@@ -568,16 +697,28 @@ def main() -> None:
         print("=" * 80)
         for model_name, factory in models:
             print(f"\nTraining {model_name}...")
-            r = train_one(
-                model_name,
-                factory,
-                train_fn,
-                val_fn,
-                suites,
-                tc,
-                seed,
-                args.eval_batches,
-            )
+            if args.use_digit_head and "Digit" in model_name:
+                r = train_one_digit(
+                    model_name,
+                    factory,
+                    train_fn,
+                    val_fn,
+                    suites,
+                    tc,
+                    seed,
+                    args.eval_batches,
+                )
+            else:
+                r = train_one(
+                    model_name,
+                    factory,
+                    train_fn,
+                    val_fn,
+                    suites,
+                    tc,
+                    seed,
+                    args.eval_batches,
+                )
             all_runs.append(r)
             msg = (
                 f"  {model_name:<26} val={r['best_val']*100:6.2f}% "
