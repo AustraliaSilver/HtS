@@ -236,7 +236,7 @@ def train_one(
         margin_weight=0.02,
         ratio_reg=1e-3,
         warmup_steps=train_config.warmup_steps,
-        label_smoothing=0.1,
+        label_smoothing=0.2,
     )
     optim = torch.optim.AdamW(model.parameters(), lr=train_config.lr, weight_decay=train_config.weight_decay)
 
@@ -372,7 +372,7 @@ def build_hts_config(max_model_length: int, num_classes: int, task_mix: tuple = 
         rank_main=8,
         rank_corr=4,
         rank_task_attn=4,
-        dropout=0.0,
+        dropout=0.1,
         use_cls_token=False,
         pool="mean",
         alpha_max=1.05,
@@ -388,7 +388,8 @@ def build_hts_config(max_model_length: int, num_classes: int, task_mix: tuple = 
         use_task_in_basis=True,
         use_ctx_basis=True,
         use_dual_delta=True,
-        label_smoothing=0.1,
+        dropout_basis=0.1,
+        label_smoothing=0.2,
     )
 
 
@@ -551,7 +552,7 @@ def main() -> None:
         steps=args.steps,
         batch_size=args.batch_size,
         lr=1e-3,
-        weight_decay=0.05,
+        weight_decay=0.1,
         warmup_steps=max(20, min(250, args.steps // 20)),
         grad_clip=1.0,
         eval_every=max(50, args.steps // 10),
