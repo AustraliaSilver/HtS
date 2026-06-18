@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from .config import HtSB12Config
-from .layers import AdaptiveBasisLowRank, HtSB12FFN, SinusoidalPosition
+from .layers import RMSNorm, AdaptiveBasisLowRank, HtSB12FFN, SinusoidalPosition, build_alibi_bias
 
 
 def _masked_sequence_mean(x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -33,6 +33,11 @@ class TaskConditionedAttention(nn.Module):
         self.n_heads = config.n_heads
         self.head_dim = config.d_model // config.n_heads
         self.dropout_p = config.dropout
+        self.use_alibi = config.use_alibi
+
+        if config.use_alibi:
+            bias = build_alibi_bias(config.n_heads, config.max_length)
+            self.register_buffer("alibi_bias", bias, persistent=False)
 
         self.q_proj = nn.Linear(config.d_model, config.d_model)
         self.k_proj = nn.Linear(config.d_model, config.d_model)
@@ -51,6 +56,7 @@ class TaskConditionedAttention(nn.Module):
             use_task_in_basis=config.use_task_in_basis,
             use_dual_delta=config.use_dual_delta,
             use_mean_basis=config.use_mean_basis,
+            use_rms_norm=config.use_rms_norm,
         )
         self.k_task = AdaptiveBasisLowRank(
             config.d_model, config.d_model, rank_attn_val,
@@ -63,6 +69,7 @@ class TaskConditionedAttention(nn.Module):
             use_task_in_basis=config.use_task_in_basis,
             use_dual_delta=config.use_dual_delta,
             use_mean_basis=config.use_mean_basis,
+            use_rms_norm=config.use_rms_norm,
         )
 
         for proj in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
@@ -92,6 +99,8 @@ class TaskConditionedAttention(nn.Module):
         v = v.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
 
         attn = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        if self.use_alibi:
+            attn = attn + self.alibi_bias[:, :, :T, :T]
         if key_padding_mask is not None:
             attn = attn.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf"))
         attn = F.softmax(attn, dim=-1)
@@ -108,8 +117,9 @@ class HtSB12EncoderLayer(nn.Module):
         super().__init__()
         self.config = config
         self.attn = TaskConditionedAttention(config, layer_id)
-        self.norm1 = nn.LayerNorm(config.d_model)
-        self.norm2 = nn.LayerNorm(config.d_model)
+        norm_fn = RMSNorm if config.use_rms_norm else nn.LayerNorm
+        self.norm1 = norm_fn(config.d_model)
+        self.norm2 = norm_fn(config.d_model)
         self.dropout = nn.Dropout(config.dropout)
         self.ffn = HtSB12FFN(
             d_model=config.d_model,
@@ -136,6 +146,7 @@ class HtSB12EncoderLayer(nn.Module):
             use_task_in_basis=config.use_task_in_basis,
             use_dual_delta=config.use_dual_delta,
             use_mean_basis=config.use_mean_basis,
+            use_rms_norm=config.use_rms_norm,
         )
 
     def forward(self, x: torch.Tensor, task: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -186,7 +197,8 @@ class HtSB12Classifier(nn.Module):
         self.pos = SinusoidalPosition(config.max_length + extra, config.d_model)
         self.dropout = nn.Dropout(config.dropout)
         self.layers = nn.ModuleList([HtSB12EncoderLayer(config, i) for i in range(config.num_layers)])
-        self.norm = nn.LayerNorm(config.d_model)
+        norm_fn = RMSNorm if config.use_rms_norm else nn.LayerNorm
+        self.norm = norm_fn(config.d_model)
         self.head = nn.Linear(config.d_model, config.num_classes)
         nn.init.normal_(self.token_emb.weight, std=0.02)
         nn.init.normal_(self.task_input_emb.weight, std=0.02)

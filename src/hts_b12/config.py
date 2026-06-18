@@ -72,6 +72,10 @@ class HtSB12Config:
     use_dual_delta: bool = True      # Small context-aware auxiliary delta (near-zero init)
     dropout_basis: float = 0.0       # Dropout inside AdaptiveBasisLowRank (tune on Kaggle for long runs)
 
+    # Architectural improvements.
+    use_rms_norm: bool = False       # Replace LayerNorm with RMSNorm (length-invariant normalization)
+    use_alibi: bool = False          # ALiBi linear bias for attention extrapolation
+
     def __post_init__(self) -> None:
         positive_ints = {
             "vocab_size": self.vocab_size,

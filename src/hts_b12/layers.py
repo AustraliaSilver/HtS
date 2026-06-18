@@ -8,6 +8,43 @@ from torch import nn
 import torch.nn.functional as F
 
 
+class RMSNorm(nn.Module):
+    """RMS Layer Normalization (Zhang & Sennrich 2019).
+
+    ``RMSNorm(x) = x / sqrt(mean(x^2, dim=-1) + eps) * gamma``
+
+    Unlike LayerNorm, RMSNorm does not subtract the mean, making it *strictly*
+    length‑invariant in the sense that its statistics depend only on the feature
+    dimension, not on how many tokens are in the sequence.
+    """
+
+    def __init__(self, d_model: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.gamma = nn.Parameter(torch.ones(d_model))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).sqrt()
+        return x / rms * self.gamma
+
+    def extra_repr(self) -> str:
+        return f"d_model={self.gamma.numel()}, eps={self.eps}"
+
+
+def build_alibi_bias(n_heads: int, max_length: int) -> torch.Tensor:
+    """Pre‑compute ALiBi attention bias for all heads up to ``max_length``.
+
+    For each head ``h``, the bias is: ``bias[h, i, j] = -slope[h] * |i - j|``
+
+    Slopes follow a geometric sequence: ``2^{-(h+1)}`` for ``h = 0..n_heads-1``.
+    """
+    slopes = torch.tensor([2.0 ** (-(h + 1)) for h in range(n_heads)], dtype=torch.float32)
+    pos = torch.arange(max_length, dtype=torch.float32)
+    offset = (pos[:, None] - pos[None, :]).abs()  # (max_len, max_len)
+    bias = -slopes[:, None, None] * offset[None, :, :]  # (n_heads, max_len, max_len)
+    return bias.unsqueeze(0)  # (1, n_heads, max_len, max_len)
+
+
 class SinusoidalPosition(nn.Module):
     def __init__(self, max_length: int, d_model: int, p_drop: float = 0.0):
         super().__init__()
@@ -145,6 +182,7 @@ class AdaptiveBasisLowRank(nn.Module):
         use_dual_delta: bool = False,
         dual_delta_scale: float = 0.05,
         use_mean_basis: bool = True,
+        use_rms_norm: bool = False,
     ) -> None:
         super().__init__()
         self.in_features = in_features
@@ -158,6 +196,7 @@ class AdaptiveBasisLowRank(nn.Module):
         self.use_task_in_basis = use_task_in_basis
         self.use_dual_delta = use_dual_delta
         self.dual_delta_scale = dual_delta_scale
+        self.norm = RMSNorm(in_features) if use_rms_norm else nn.LayerNorm(in_features)
         hidden = hidden or max(32, task_dim * 2)
 
         self.task_emb = nn.Embedding(num_tasks, task_dim)
@@ -208,7 +247,7 @@ class AdaptiveBasisLowRank(nn.Module):
     def forward(self, x: torch.Tensor, task: torch.Tensor, ctx: Optional[torch.Tensor] = None) -> torch.Tensor:
         te = self.task_emb(task)
         coeff = 1.0 + self.tune_scale * torch.tanh(self.router(te))
-        x_ln = F.layer_norm(x, [self.in_features])
+        x_ln = self.norm(x)
 
         # Richer input statistics (mean + optional std + optional ctx + task basis).
         stats_parts = []
@@ -310,6 +349,7 @@ class HtSB12FFN(nn.Module):
         use_task_in_basis: bool = True,
         use_dual_delta: bool = False,
         use_mean_basis: bool = True,
+        use_rms_norm: bool = False,
     ) -> None:
         super().__init__()
         self.name = name
@@ -332,6 +372,7 @@ class HtSB12FFN(nn.Module):
         self.use_task_in_basis = use_task_in_basis
         self.use_dual_delta = use_dual_delta
         self.use_mean_basis = use_mean_basis
+        self.use_rms_norm = use_rms_norm
 
         self.base_l1 = nn.Linear(d_model, dim_ff)
         self.base_l2 = nn.Linear(dim_ff, d_model)
@@ -384,6 +425,7 @@ class HtSB12FFN(nn.Module):
             use_task_in_basis=use_task_in_basis,
             use_dual_delta=use_dual_delta,
             use_mean_basis=use_mean_basis,
+            use_rms_norm=use_rms_norm,
         )
         self.main2 = AdaptiveBasisLowRank(
             dim_ff,
@@ -399,6 +441,7 @@ class HtSB12FFN(nn.Module):
             use_task_in_basis=use_task_in_basis,
             use_dual_delta=use_dual_delta,
             use_mean_basis=use_mean_basis,
+            use_rms_norm=use_rms_norm,
         )
         self.corr1 = AdaptiveBasisLowRank(
             d_model,
@@ -415,6 +458,7 @@ class HtSB12FFN(nn.Module):
             use_task_in_basis=use_task_in_basis,
             use_dual_delta=use_dual_delta,
             use_mean_basis=use_mean_basis,
+            use_rms_norm=use_rms_norm,
         )
         self.dropout = nn.Dropout(dropout)
         self._last: Dict[str, float] = {}
