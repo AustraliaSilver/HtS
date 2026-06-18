@@ -39,15 +39,22 @@ class DigitOutputMixin:
     def compose_digits(hundreds: torch.Tensor, tens: torch.Tensor, ones: torch.Tensor) -> torch.Tensor:
         return (100 * hundreds + 10 * tens + ones).long()
 
-    def digit_loss(self, outputs: Dict[str, torch.Tensor], labels: torch.Tensor) -> torch.Tensor:
+    def digit_loss(
+        self,
+        outputs: Dict[str, torch.Tensor],
+        labels: torch.Tensor,
+        label_smoothing: float = 0.0,
+        digit_weights: Optional[Tuple[float, float, float]] = None,
+    ) -> torch.Tensor:
         h, t, o = self.split_digits(labels)
         # Hundreds head is configured to the needed range, usually 0..2 for max<=256.
         max_h = outputs["hundreds"].size(-1) - 1
         h = h.clamp(max=max_h)
+        w = digit_weights if digit_weights is not None else (1.0, 1.0, 1.0)
         return (
-            F.cross_entropy(outputs["hundreds"], h)
-            + F.cross_entropy(outputs["tens"], t)
-            + F.cross_entropy(outputs["ones"], o)
+            w[0] * F.cross_entropy(outputs["hundreds"], h, label_smoothing=label_smoothing)
+            + w[1] * F.cross_entropy(outputs["tens"], t, label_smoothing=label_smoothing)
+            + w[2] * F.cross_entropy(outputs["ones"], o, label_smoothing=label_smoothing)
         )
 
     def predict_digits(self, outputs: Dict[str, torch.Tensor]) -> torch.Tensor:
