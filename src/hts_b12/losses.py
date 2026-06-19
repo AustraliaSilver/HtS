@@ -31,8 +31,14 @@ class LossBreakdown:
     task_offset_reg: torch.Tensor
     delta_reg: torch.Tensor
 
+    @property
+    def loss(self) -> torch.Tensor:
+        return self.total
+
     def scalars(self) -> Dict[str, float]:
-        return {k: float(v.detach().cpu()) for k, v in self.__dict__.items()}
+        d = {k: float(v.detach().cpu()) for k, v in self.__dict__.items()}
+        d["loss"] = float(self.total.detach().cpu())
+        return d
 
 
 class HtSB12Objective(nn.Module):
