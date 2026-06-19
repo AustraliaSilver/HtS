@@ -263,6 +263,7 @@ class AdaptiveBasisLowRank(nn.Module):
 
         delta = self.a_gen(x_stats)
         delta = delta.view(-1, self.rank, self.in_features)  # [B, rank, in_features]
+        self._delta_reg_val = delta.pow(2).mean()
 
         if self.use_dual_delta and ctx is not None:
             aux_delta = self.dual_delta_gen(ctx).view(-1, self.rank, self.in_features)
@@ -527,6 +528,9 @@ class HtSB12FFN(nn.Module):
 
         budget = gate.mean() * 0.5 * (self.main1.budget_tensor() + self.main2.budget_tensor())
         budget = budget + 0.25 * cgate.mean() * self.corr1.budget_tensor()
+        # Delta regularization: penalize ||δ||_F² of generated deltas.
+        self._delta_reg = self.main1._delta_reg_val + self.main2._delta_reg_val + self.corr1._delta_reg_val
+        budget = budget + 10.0 * self._delta_reg
         binary = (gate * (1.0 - gate)).mean() + 0.5 * (cgate * (1.0 - cgate)).mean()
         ratio_penalty = F.relu(ratio - self.ratio_ceiling).pow(2) + 0.5 * F.relu(corr_ratio - self.corr_ceiling).pow(2)
         task_offset_l2 = off.pow(2).mean()
@@ -554,8 +558,8 @@ class HtSB12FFN(nn.Module):
         self._last.update(self.corr1.diagnostics())
         return y
 
-    def hts_regularizers(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self._budget, self._binary, self._ratio_penalty, self._task_offset_l2
+    def hts_regularizers(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self._budget, self._binary, self._ratio_penalty, self._task_offset_l2, self._delta_reg
 
     def diagnostics(self) -> Dict[str, float]:
         return dict(self._last)

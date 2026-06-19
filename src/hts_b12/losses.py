@@ -22,13 +22,14 @@ class MarginLoss(nn.Module):
 
 @dataclass
 class LossBreakdown:
-    loss: torch.Tensor
-    ce_loss: torch.Tensor
-    margin_loss: torch.Tensor
+    total: torch.Tensor
+    ce: torch.Tensor
+    margin: torch.Tensor
     budget_reg: torch.Tensor
     binary_reg: torch.Tensor
     ratio_reg: torch.Tensor
     task_offset_reg: torch.Tensor
+    delta_reg: torch.Tensor
 
     def scalars(self) -> Dict[str, float]:
         return {k: float(v.detach().cpu()) for k, v in self.__dict__.items()}
@@ -45,6 +46,7 @@ class HtSB12Objective(nn.Module):
         budget_reg: float = 0.0,
         binary_reg: float = 0.0,
         task_offset_reg: float = 0.0,
+        delta_reg_weight: float = 0.0,
         warmup_steps: int = 0,
         label_smoothing: float = 0.0,
     ) -> None:
@@ -55,6 +57,7 @@ class HtSB12Objective(nn.Module):
         self.budget_reg = budget_reg
         self.binary_reg = binary_reg
         self.task_offset_reg = task_offset_reg
+        self.delta_reg_weight = delta_reg_weight
         self.warmup_steps = warmup_steps
         self.label_smoothing = label_smoothing
 
@@ -63,12 +66,13 @@ class HtSB12Objective(nn.Module):
         ml = self.margin(logits, labels)
         warm = 1.0 if self.warmup_steps <= 0 else min(1.0, step / max(1, self.warmup_steps))
         dev = logits.device
-        budget = binary = ratio = offset = torch.zeros((), device=dev)
+        budget = binary = ratio = offset = delta_reg = torch.zeros((), device=dev)
         if hasattr(model, "hts_regularizers"):
-            budget, binary, ratio, offset = model.hts_regularizers()
+            budget, binary, ratio, offset, delta_reg = model.hts_regularizers()
         breg = self.budget_reg * warm * budget
         bireg = self.binary_reg * warm * binary
         rreg = self.ratio_reg * warm * ratio
         oreg = self.task_offset_reg * warm * offset
-        total = ce + self.margin_weight * warm * ml + breg + bireg + rreg + oreg
-        return LossBreakdown(total, ce, ml, breg, bireg, rreg, oreg)
+        dreg = self.delta_reg_weight * warm * delta_reg
+        total = ce + self.margin_weight * warm * ml + breg + bireg + rreg + oreg + dreg
+        return LossBreakdown(total, ce, ml, breg, bireg, rreg, oreg, dreg)

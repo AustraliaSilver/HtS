@@ -216,7 +216,7 @@ def compute_loss(model: torch.nn.Module, outputs, labels: torch.Tensor, step: in
         loss = model.digit_loss(outputs, labels)  # type: ignore[attr-defined]
         warm = min(1.0, step / max(1, objective.warmup_steps)) if objective.warmup_steps else 1.0
         if hasattr(model, "hts_regularizers"):
-            budget, binary, ratio, offset = model.hts_regularizers()
+            budget, binary, ratio, offset, delta_reg = model.hts_regularizers()
             loss = loss + objective.ratio_reg * warm * ratio
         return loss
     else:

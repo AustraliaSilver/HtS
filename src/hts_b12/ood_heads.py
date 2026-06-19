@@ -149,7 +149,7 @@ class HtSB12DigitClassifier(nn.Module, DigitOutputMixin):
         z = self.head_mlp(pooled + self.task_head_emb(task_ids))
         return {"hundreds": self.hundreds(z), "tens": self.tens(z), "ones": self.ones(z)}
 
-    def hts_regularizers(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def hts_regularizers(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         regs = [layer.ffn.hts_regularizers() for layer in self.layers]
         cols = list(zip(*regs))
         return tuple(torch.stack(list(c)).mean() for c in cols)  # type: ignore[return-value]

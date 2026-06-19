@@ -377,8 +377,8 @@ def train_one_digit(
         outputs = model(batch.input_ids, batch.task_ids, batch.attention_mask)
         loss = model.digit_loss(outputs, batch.labels, label_smoothing=0.1, digit_weights=(0.1, 0.4, 0.5))
         if hasattr(model, "hts_regularizers"):
-            budget, binary, ratio_penalty, task_offset_l2 = model.hts_regularizers()
-            loss = loss + 1e-3 * budget + 1e-3 * binary + 0.01 * ratio_penalty + 1e-3 * task_offset_l2
+            budget, binary, ratio_penalty, task_offset_l2, delta_reg = model.hts_regularizers()
+            loss = loss + 1e-3 * budget + 1e-3 * binary + 0.01 * ratio_penalty + 1e-3 * task_offset_l2 + 1e-3 * delta_reg
         optim.zero_grad(set_to_none=True)
         loss.backward()
         if train_config.grad_clip:

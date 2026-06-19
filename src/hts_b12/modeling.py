@@ -230,7 +230,7 @@ class HtSB12Classifier(nn.Module):
             pooled = x[:, 0]
         return self.head(pooled)
 
-    def hts_regularizers(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def hts_regularizers(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         regs = [layer.ffn.hts_regularizers() for layer in self.layers]
         cols = list(zip(*regs))
         return tuple(torch.stack(list(c)).mean() for c in cols)  # type: ignore[return-value]
