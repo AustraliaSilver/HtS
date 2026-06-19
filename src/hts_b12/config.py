@@ -75,6 +75,7 @@ class HtSB12Config:
     # Architectural improvements.
     use_rms_norm: bool = False       # Replace LayerNorm with RMSNorm (length-invariant normalization)
     use_alibi: bool = False          # ALiBi linear bias for attention extrapolation
+    disable_basis_layer1: bool = False  # Freeze Layer-1 FFN to standard MLP (task isolation)
 
     def __post_init__(self) -> None:
         positive_ints = {

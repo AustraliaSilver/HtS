@@ -350,6 +350,7 @@ class HtSB12FFN(nn.Module):
         use_dual_delta: bool = False,
         use_mean_basis: bool = True,
         use_rms_norm: bool = False,
+        disable_basis: bool = False,
     ) -> None:
         super().__init__()
         self.name = name
@@ -373,6 +374,7 @@ class HtSB12FFN(nn.Module):
         self.use_dual_delta = use_dual_delta
         self.use_mean_basis = use_mean_basis
         self.use_rms_norm = use_rms_norm
+        self.disable_basis = disable_basis
 
         self.base_l1 = nn.Linear(d_model, dim_ff)
         self.base_l2 = nn.Linear(dim_ff, d_model)
@@ -483,6 +485,17 @@ class HtSB12FFN(nn.Module):
         return raw * scale
 
     def forward(self, x: torch.Tensor, task: torch.Tensor, valid_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if self.disable_basis:
+            h = F.gelu(self.base_l1(x))
+            h = self.dropout(h)
+            y = self.base_l2(h)
+            self._budget = torch.tensor(0.0, device=x.device)
+            self._binary = torch.tensor(0.0, device=x.device)
+            self._ratio_penalty = torch.tensor(0.0, device=x.device)
+            self._task_offset_l2 = torch.tensor(0.0, device=x.device)
+            self._last = {f"{self.name}_disabled": 1.0}
+            return y
+
         ctx = _masked_mean(x, valid_mask)
         te = self.task_emb(task)
         
