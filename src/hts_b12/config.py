@@ -75,6 +75,7 @@ class HtSB12Config:
     # Architectural improvements.
     use_rms_norm: bool = False       # Replace LayerNorm with RMSNorm (length-invariant normalization)
     use_alibi: bool = False          # ALiBi linear bias for attention extrapolation
+    use_learnable_alibi: bool = False  # Learnable ALiBi slopes (init from 2^{-(h+2)})
 
     def __post_init__(self) -> None:
         positive_ints = {

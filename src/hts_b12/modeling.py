@@ -33,11 +33,23 @@ class TaskConditionedAttention(nn.Module):
         self.n_heads = config.n_heads
         self.head_dim = config.d_model // config.n_heads
         self.dropout_p = config.dropout
-        self.use_alibi = config.use_alibi
+        self.use_alibi = config.use_alibi or config.use_learnable_alibi
+        self.use_learnable_alibi = config.use_learnable_alibi
 
-        if config.use_alibi:
-            bias = build_alibi_bias(config.n_heads, config.max_length)
-            self.register_buffer("alibi_bias", bias, persistent=False)
+        if config.use_alibi or config.use_learnable_alibi:
+            # Pre-compute position offset matrix for efficient ALiBi.
+            pos = torch.arange(config.max_length, dtype=torch.float32)
+            offset = (pos[:, None] - pos[None, :]).abs()
+            self.register_buffer("alibi_offset", offset, persistent=False)
+
+            if config.use_learnable_alibi:
+                default_slopes = torch.tensor(
+                    [2.0 ** (-(h + 2)) for h in range(config.n_heads)]
+                )
+                self.alibi_slopes = nn.Parameter(default_slopes)
+            else:
+                bias = build_alibi_bias(config.n_heads, config.max_length)
+                self.register_buffer("alibi_bias", bias, persistent=False)
 
         self.q_proj = nn.Linear(config.d_model, config.d_model)
         self.k_proj = nn.Linear(config.d_model, config.d_model)
@@ -100,7 +112,12 @@ class TaskConditionedAttention(nn.Module):
 
         attn = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
         if self.use_alibi:
-            attn = attn + self.alibi_bias[:, :, :T, :T]
+            if self.use_learnable_alibi:
+                slopes = self.alibi_slopes.abs()  # ensure positive → prevents entropy collapse
+                bias = -slopes[:, None, None] * self.alibi_offset[:T, :T][None, :, :]
+                attn = attn + bias[None, :, :, :]
+            else:
+                attn = attn + self.alibi_bias[:, :, :T, :T]
         if key_padding_mask is not None:
             attn = attn.masked_fill(key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf"))
         attn = F.softmax(attn, dim=-1)
