@@ -238,8 +238,9 @@ class AdaptiveBasisLowRank(nn.Module):
         nn.init.normal_(self.b.weight, std=0.02)
         nn.init.zeros_(self.router[-1].weight)
         nn.init.zeros_(self.router[-1].bias)
-        # Initialise the generator so the output is near zero at start.
-        nn.init.zeros_(self.a_gen[-1].weight)
+        # Initialise the generator with small values so delta ≈ 0 at start
+        # but gradient can flow (zero init blocks backprop through a_gen).
+        nn.init.normal_(self.a_gen[-1].weight, std=0.001)
         nn.init.zeros_(self.a_gen[-1].bias)
         self._last: Dict[str, float] = {}
 
@@ -528,9 +529,8 @@ class HtSB12FFN(nn.Module):
 
         budget = gate.mean() * 0.5 * (self.main1.budget_tensor() + self.main2.budget_tensor())
         budget = budget + 0.25 * cgate.mean() * self.corr1.budget_tensor()
-        # Delta regularization: penalize ||δ||_F² of generated deltas.
+        # Delta regularization: penalize ||δ||_F² of generated deltas (separate from budget).
         self._delta_reg = self.main1._delta_reg_val + self.main2._delta_reg_val + self.corr1._delta_reg_val
-        budget = budget + 10.0 * self._delta_reg
         binary = (gate * (1.0 - gate)).mean() + 0.5 * (cgate * (1.0 - cgate)).mean()
         ratio_penalty = F.relu(ratio - self.ratio_ceiling).pow(2) + 0.5 * F.relu(corr_ratio - self.corr_ceiling).pow(2)
         task_offset_l2 = off.pow(2).mean()
