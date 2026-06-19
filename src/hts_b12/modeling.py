@@ -113,7 +113,7 @@ class TaskConditionedAttention(nn.Module):
 
 
 class HtSB12EncoderLayer(nn.Module):
-    def __init__(self, config: HtSB12Config, layer_id: int, disable_basis: bool = False):
+    def __init__(self, config: HtSB12Config, layer_id: int):
         super().__init__()
         self.config = config
         self.attn = TaskConditionedAttention(config, layer_id)
@@ -147,7 +147,6 @@ class HtSB12EncoderLayer(nn.Module):
             use_dual_delta=config.use_dual_delta,
             use_mean_basis=config.use_mean_basis,
             use_rms_norm=config.use_rms_norm,
-            disable_basis=disable_basis,
         )
 
     def forward(self, x: torch.Tensor, task: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -197,10 +196,7 @@ class HtSB12Classifier(nn.Module):
         self.cls = nn.Parameter(torch.zeros(1, 1, config.d_model)) if config.use_cls_token else None
         self.pos = SinusoidalPosition(config.max_length + extra, config.d_model)
         self.dropout = nn.Dropout(config.dropout)
-        self.layers = nn.ModuleList([
-            HtSB12EncoderLayer(config, i, disable_basis=(i == 0 and config.disable_basis_layer1))
-            for i in range(config.num_layers)
-        ])
+        self.layers = nn.ModuleList([HtSB12EncoderLayer(config, i) for i in range(config.num_layers)])
         norm_fn = RMSNorm if config.use_rms_norm else nn.LayerNorm
         self.norm = norm_fn(config.d_model)
         self.head = nn.Linear(config.d_model, config.num_classes)

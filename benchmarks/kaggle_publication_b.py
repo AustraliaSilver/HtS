@@ -514,7 +514,6 @@ def build_hts_config(max_model_length: int, num_classes: int, task_mix: tuple = 
         label_smoothing=0.1,
         use_rms_norm=True,
         use_alibi=True,
-        disable_basis_layer1=True,
     )
 
 
