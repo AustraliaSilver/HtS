@@ -36,9 +36,9 @@ def build_alibi_bias(n_heads: int, max_length: int) -> torch.Tensor:
 
     For each head ``h``, the bias is: ``bias[h, i, j] = -slope[h] * |i - j|``
 
-    Slopes follow a geometric sequence: ``2^{-(h+1)}`` for ``h = 0..n_heads-1``.
+    Slopes follow a geometric sequence: ``2^{-(h+2)}`` for ``h = 0..n_heads-1``.
     """
-    slopes = torch.tensor([2.0 ** (-(h + 1)) for h in range(n_heads)], dtype=torch.float32)
+    slopes = torch.tensor([2.0 ** (-(h + 2)) for h in range(n_heads)], dtype=torch.float32)
     pos = torch.arange(max_length, dtype=torch.float32)
     offset = (pos[:, None] - pos[None, :]).abs()  # (max_len, max_len)
     bias = -slopes[:, None, None] * offset[None, :, :]  # (n_heads, max_len, max_len)
